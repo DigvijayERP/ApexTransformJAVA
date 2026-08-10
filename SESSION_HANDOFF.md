@@ -86,7 +86,7 @@ cd backend && python smoke_test.py && python store_test.py
 |---|---|---|
 | 1 | `QAD_PASSWORD` → `backend/.env` | Any live call. Everything else can be built and dry-run |
 | 2 | `OPENAI_API_KEY` → `backend/.env` | Stages 1, 2, 3 are LLM calls |
-| 3 | ❓ Should the Browse URI field be a **free-text box or a picker**? A picker needs a live probe of QAD's browse list, which needs credentials | Stage-4 dialog shape (free text works either way) |
+| 3 | **API captures** — see [API_CAPTURES_NEEDED.md](API_CAPTURES_NEEDED.md). None block the build; they settle the lookup unknowns and upgrade free-text boxes to pickers | Live lookup writes only |
 | 4 | Confirm the Phase 1 static/dynamic classification | Settings panel shape |
 | 5 | **Q-L** — did `probe_parent_eh.py` ever run, and what did it return? | Phase 5 design |
 | 6 | **Q-F** — permission + which environment for the grid-claiming experiment | Phase 5 design |
@@ -164,7 +164,8 @@ Secrets live in `backend/.env` (gitignored). **Set:** `QAD_CLIENT_ID`, `QAD_USER
 | 2 | [PROGRESS.md](PROGRESS.md) | Full log, deferrals, resume point |
 | 3 | [PHASE0_SUMMARY.md](PHASE0_SUMMARY.md) (18 KB) | The audit's findings, readable |
 | 4 | [PHASE1_REGISTRY.md](PHASE1_REGISTRY.md) | What Phase 1 built and what it's waiting on |
-| 5 | [QUESTIONS.md](QUESTIONS.md) | 12 decisions, triaged by what they block |
+| 5 | [API_CAPTURES_NEEDED.md](API_CAPTURES_NEEDED.md) | What to grab from QAD's Network tab, and when |
+| 6 | [QUESTIONS.md](QUESTIONS.md) | 12 decisions, triaged by what they block |
 | 6 | [VERIFICATION_ROUND2.md](VERIFICATION_ROUND2.md) | Which audit claims survived checking |
 | — | `PHASE0_AUDIT.md` (583 KB) | **Do not read front to back.** Citation appendix — grep it |
 
