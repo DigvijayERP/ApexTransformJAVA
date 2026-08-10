@@ -56,6 +56,8 @@ frontend/dist/
 backend/static/
 
 # Runtime generated
+backend/runs.db
+backend/runs.db.bak*
 backend/history.db
 backend/history.db.bak*
 backend/logs/

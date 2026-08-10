@@ -54,15 +54,22 @@ Stage 6 skips itself when nothing was marked at stage 2.
 
 ### Done — backend foundation, verified
 
-`core/config.py` · `core/stages.py` · `qad_client.py` ·
-`builders/{identity,naming,bc,form,view,deploy,event_handler,lookup}` · `smoke_test.py`.
-**100 offline assertions pass** (`cd backend && python smoke_test.py`) — no network, no credentials
-needed. Run it after any change to config, identity or the builders.
+`core/config.py` · `core/stages.py` · `core/store.py` · `qad_client.py` ·
+`builders/{identity,naming,bc,form,view,deploy,event_handler,lookup}`.
+
+**138 offline assertions pass. Run both after any change — no network, no credentials:**
+
+```bash
+cd backend && python smoke_test.py && python store_test.py
+```
+
+`store.py` holds the regeneration lock. Its rule: a stage may be regenerated only while no
+**successful live** write has fired at that stage or any stage after it. Dry-run writes never lock
+(nothing left the process) and rejected writes never lock (QAD changed nothing).
 
 ### Next — the run engine
 
-1. Per-stage artifact store (SQLite, keyed `run_id` + `stage_id`) — nothing can be shown at a gate or
-   regenerated from without it.
+1. ~~Per-stage artifact store~~ ✅ **done** — `core/store.py`, 38 assertions.
 2. The seven stage functions, each reading/writing that store. Stage 4 also needs the LLM prompt
    ported with the `{{BROWSE_URI:field}}` convention replacing AUX's comment-it-out instruction.
 3. **Port the ABL parsers** — `progress_parser.py` (414 lines, parses ABL source) and
