@@ -119,6 +119,14 @@ async def init_db(db_path: Optional[Path] = None) -> None:
                 endpoint_id  TEXT NOT NULL,
                 dry_run      INTEGER NOT NULL,
                 ok           INTEGER NOT NULL,
+                -- Does this call lock regeneration? Only calls made by a
+                -- stage's commit — i.e. by an APPROVAL — do. A stage may also
+                -- call QAD while merely RENDERING its gate: the deploy stage
+                -- runs deployCheckForWarnings so the dialog can show what QAD
+                -- said. Those must be audited but must NOT lock, or simply
+                -- opening the deploy dialog would freeze the whole run before
+                -- the user approved anything.
+                locking      INTEGER NOT NULL DEFAULT 1,
                 request      TEXT,
                 response     TEXT,
                 executed_at  TEXT NOT NULL
@@ -305,15 +313,21 @@ async def run_stages(run_id: str, db_path: Optional[Path] = None) -> List[Dict[s
 # ── QAD write audit + the regeneration lock ───────────────────────────────────
 async def record_write(run_id: str, stage_id: str, endpoint_id: str, *,
                        ok: bool, dry_run: bool, request: Any = None,
-                       response: Any = None, db_path: Optional[Path] = None) -> None:
-    """Record one QAD call. Dry-run calls are recorded too — they are the
-    rehearsal transcript — but they never lock regeneration."""
+                       response: Any = None, locking: bool = True,
+                       db_path: Optional[Path] = None) -> None:
+    """Record one QAD call.
+
+    Dry-run calls are recorded too — they are the rehearsal transcript — but
+    they never lock. `locking=False` marks a call the stage made while
+    RENDERING rather than committing, which is audited but must not freeze
+    regeneration.
+    """
     async with aiosqlite.connect(db_path or DB_PATH) as db:
         await db.execute(
             "INSERT INTO qad_writes (run_id, stage_id, endpoint_id, dry_run, ok,"
-            " request, response, executed_at) VALUES (?,?,?,?,?,?,?,?)",
+            " locking, request, response, executed_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (run_id, stage_id, endpoint_id, 1 if dry_run else 0, 1 if ok else 0,
-             _dumps(request), _dumps(response), _now()),
+             1 if locking else 0, _dumps(request), _dumps(response), _now()),
         )
         await db.commit()
 
@@ -333,6 +347,7 @@ async def writes_for_run(run_id: str, live_only: bool = False,
         d = dict(r)
         d["dry_run"] = bool(d["dry_run"])
         d["ok"] = bool(d["ok"])
+        d["locking"] = bool(d["locking"])
         d["request"] = _loads(d["request"])
         d["response"] = _loads(d["response"])
         out.append(d)
@@ -348,8 +363,12 @@ async def can_regenerate(run_id: str, stage_id: str,
     it. A successful live write downstream means re-running would attempt it a
     second time, and QAD offers no way back.
 
-    Dry-run writes are ignored: nothing left the process.
-    Failed live writes are ignored too — QAD rejected them, so no state changed.
+    Three kinds of call are ignored, each for its own reason:
+      - dry-run       nothing left the process
+      - failed        QAD rejected it, so no state changed — and a duplicate-name
+                      rejection is exactly when the user most needs to go back
+      - non-locking   made while rendering a gate, not by approving one.
+                      Otherwise opening the deploy dialog would freeze the run.
     """
     stage = stages.get(stage_id)
     order = {s.id: i for i, s in enumerate(stages.STAGES)}
@@ -360,7 +379,7 @@ async def can_regenerate(run_id: str, stage_id: str,
         order_index = order[stage_id]
 
     for write in await writes_for_run(run_id, live_only=True, db_path=db_path):
-        if not write["ok"]:
+        if not write["ok"] or not write["locking"]:
             continue
         w_index = order.get(write["stage_id"])
         if w_index is None or w_index < order_index:

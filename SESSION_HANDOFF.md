@@ -57,11 +57,16 @@ Stage 6 skips itself when nothing was marked at stage 2.
 `core/config.py` · `core/stages.py` · `core/store.py` · `qad_client.py` ·
 `builders/{identity,naming,bc,form,view,deploy,event_handler,lookup}`.
 
-**141 offline assertions pass. Run both after any change — no network, no credentials:**
+**201 offline assertions pass. Run all three after any change — no network, no credentials,
+no API key:**
 
 ```bash
-cd backend && python smoke_test.py && python store_test.py
+cd backend && python smoke_test.py && python store_test.py && python pipeline_test.py
 ```
+
+`pipeline_test.py` is the one that matters most: it drives all seven stages end to end through the
+real engine, real builders and real store with only the MODEL stubbed. The others test pieces in
+isolation; this one catches **chaining** bugs — and it found two on its first run.
 
 `store.py` holds the regeneration lock. Its rule: a stage may be regenerated only while no
 **successful live** write has fired at that stage or any stage after it. Dry-run writes never lock
@@ -70,7 +75,11 @@ cd backend && python smoke_test.py && python store_test.py
 ### Next — the run engine
 
 1. ~~Per-stage artifact store~~ ✅ **done** — `core/store.py`, 41 assertions.
-2. The seven stage functions, each reading/writing that store. Stage 4 also needs the LLM prompt
+2. ~~The seven stage functions~~ ✅ **done** — `core/engine.py`.
+3. ⚠️ **Port `agents/prompts.py`** — every prompt is a loud PLACEHOLDER. `assert_ported()` refuses
+   to drive a real model with one, so a live run fails early instead of generating plausible nonsense.
+   This is the last thing between here and a real dry run.
+4. The old item 2, each reading/writing that store. Stage 4 also needs the LLM prompt
    ported with the `{{BROWSE_URI:field}}` convention replacing AUX's comment-it-out instruction.
 3. **Port the ABL parsers** — `progress_parser.py` (414 lines, parses ABL source) and
    `lookup_detector.py` (585 lines). They feed four stages: requirements, the field spec, whether a

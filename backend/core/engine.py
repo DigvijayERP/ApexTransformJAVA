@@ -1,0 +1,623 @@
+"""
+The run engine: seven stage functions plus run / approve / regenerate / skip.
+
+THE ONE ARCHITECTURAL POINT
+
+Every stage reads its inputs from the ARTIFACT STORE, never from a local
+variable. That is the whole reason this can pause.
+
+AUX's run_pipeline is a single async generator holding `requirements`, `spec`,
+`placements`, `ts_code`, `js_code` and `token` in locals
+(aux_web_version/backend/pipeline.py:381-802). A generator cannot be suspended
+across HTTP requests, so a human gate is impossible inside it — which is why
+Phase 2 is an orchestration rewrite rather than a UI feature.
+
+THE GATE SITS BEFORE THE WRITE
+
+A stage function produces two things: the artifact the dialog displays, and a
+`commit` callable that performs the QAD writes. Running a stage does NOT write.
+Approving is what calls `commit`. So the dialog always shows the exact payload
+that is about to be sent, and dry-run renders identically to live — the only
+difference is whether the request leaves the process.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field as dc_field
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+
+import qad_client
+from core import llm, stages, store
+from core.logging_setup import get_logger
+from builders import event_handler_builder as ehb
+from builders import lookup_builder as lkb
+from builders import naming
+from builders.bc_builder import build_bc_payload, patch_dropdown_fields
+from builders.deploy_builder import build_deploy_payload
+from builders.form_builder import build_form_payload
+from builders.identity import AppIdentity
+from builders.view_builder import build_view_payload
+
+logger = get_logger("adaptive.engine")
+
+
+class StageError(RuntimeError):
+    """A stage could not produce its artifact. Message is user-facing."""
+
+
+@dataclass
+class StageResult:
+    """What running a stage produces, before anything is written."""
+    artifact: Dict[str, Any]
+    # async (dry_run: bool) -> list[QadResult]. None means the stage writes nothing.
+    commit: Optional[Callable[[bool], Awaitable[List[Any]]]] = None
+    skip: bool = False
+    skip_reason: str = ""
+    warnings: List[str] = dc_field(default_factory=list)
+
+
+# ── Context: what earlier stages left behind ─────────────────────────────────
+async def context(run_id: str, **db) -> Dict[str, Any]:
+    """Assemble the approved outputs of every prior stage.
+
+    Reads the LATEST attempt of each, which is what regeneration is for: a
+    re-run of an upstream stage is picked up here automatically by everything
+    downstream.
+    """
+    # Carried so a stage that must record a call while RENDERING (the deploy
+    # warnings check) writes to the same database the caller is using.
+    ctx: Dict[str, Any] = {"run_id": run_id, "_db": dict(db)}
+    run = await store.get_run(run_id, **db)
+    if not run:
+        raise StageError(f"No run '{run_id}'.")
+    ctx["run"] = run
+    ctx["user_input"] = run["user_input"]
+    ctx["dry_run"] = run["dry_run"]
+    for stage in stages.STAGES:
+        row = await store.get_stage(run_id, stage.id, **db)
+        if row and row["artifact"]:
+            ctx[stage.id] = row["artifact"]
+    return ctx
+
+
+def _need(ctx: Dict[str, Any], stage_id: str, what: str) -> Any:
+    art = ctx.get(stage_id)
+    if not art or what not in art:
+        raise StageError(
+            f"Stage '{stage_id}' has not produced '{what}' yet. Run and approve it first."
+        )
+    return art[what]
+
+
+# ── Stage 1: requirements ────────────────────────────────────────────────────
+async def stage_requirements(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    from agents import prompts
+
+    user = ctx["user_input"]
+    if instruction:
+        user = f"{user}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
+
+    text = await llm.complete(prompts.REQUIREMENTS_GATHERING, user, role="planning")
+    if not text.strip():
+        raise StageError("The model returned an empty requirements summary.")
+
+    # A .p/.cls parse would set this; with no source we ask the planner later.
+    return StageResult(artifact={
+        "text": text.strip(),
+        "source": "llm",
+        "handler_hint": None,
+    })
+
+
+# ── Stage 2: fields ──────────────────────────────────────────────────────────
+async def stage_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    from agents import prompts
+
+    requirements = _need(ctx, "requirements", "text")
+    user = requirements
+    if instruction:
+        user = f"{requirements}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
+
+    parsed = llm.parse_json(
+        await llm.complete(prompts.FIELD_CREATOR, user, role="generation", json_mode=True)
+    )
+    spec = parsed.get("spec") if isinstance(parsed, dict) else None
+    if not spec:
+        raise StageError("The model did not return a `spec` object.")
+
+    problems = naming.validate_spec(spec)
+    if problems:
+        raise StageError("The field design is not valid:\n  - " + "\n  - ".join(problems))
+
+    ident = AppIdentity.from_config()
+    built = build_bc_payload(spec, ident)
+
+    # Surface every SQL-safe rename. Asking for `status` and silently getting a
+    # column called `statusCode` is exactly the kind of surprise a gate exists
+    # to prevent.
+    renames = [
+        {"asked_for": f["code"], "actual_column": naming.sql_safe(f["code"])}
+        for f in spec["fields"] if naming.sql_safe(f["code"]) != f["code"]
+    ]
+
+    async def commit(dry_run: bool) -> List[Any]:
+        results = []
+        create = await qad_client.call("bc.create", payload=built["payload"], dry_run=dry_run)
+        results.append(("bc.create", create))
+        if not create.ok:
+            return results
+
+        # Dropdown wiring: QAD's Entity Builder needs a second save. GET the
+        # enriched metadata, point each dropdown at its list, POST it back.
+        if built["field_list_map"]:
+            params = {"entity_uri": built["entity_uri"]}
+            got = await qad_client.call("bc.metadata.read", params=params, dry_run=dry_run)
+            results.append(("bc.metadata.read", got))
+            if got.ok and not dry_run:
+                body = got.data.get("data") if isinstance(got.data.get("data"), dict) else got.data
+                if not body.get("entityMetadatas"):
+                    return results
+                patch_dropdown_fields(body, built["field_list_map"])
+                wired = await qad_client.call("bc.metadata.write", payload=body,
+                                              params=params, dry_run=dry_run)
+                results.append(("bc.metadata.write", wired))
+            elif dry_run:
+                # Nothing was really read, so show what the second save would carry.
+                preview = {"entityMetadatas": [{"entityFields": [
+                    {"entityFieldCode": code, **info}
+                    for code, info in built["field_list_map"].items()
+                ]}]}
+                wired = await qad_client.call("bc.metadata.write", payload=preview,
+                                              params=params, dry_run=True)
+                results.append(("bc.metadata.write", wired))
+        return results
+
+    return StageResult(
+        artifact={
+            "spec": spec,
+            "bc_pascal": spec["bc_pascal"],
+            "field_count": len(spec["fields"]),
+            "renamed_fields": renames,
+            "entity_uri": built["entity_uri"],
+            "payload_preview": built["payload"],
+            "summary": built["summary"],
+        },
+        commit=commit,
+        warnings=[
+            f"'{r['asked_for']}' is a SQL reserved word - the QAD column will be "
+            f"'{r['actual_column']}'." for r in renames
+        ],
+    )
+
+
+# ── Stage 3: form ────────────────────────────────────────────────────────────
+async def stage_form(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    from agents import prompts
+    import json as _json
+
+    spec = _need(ctx, "fields", "spec")
+    codes = [str(f["code"]) for f in spec["fields"]]
+
+    plan = await llm.complete(prompts.FORM_PLANNER, _json.dumps(spec["fields"]), role="planning")
+    user = plan
+    if instruction:
+        user = f"{plan}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
+
+    placements = _placements_from(
+        llm.parse_json(await llm.complete(prompts.FORM_FIELD_BUILDER, user,
+                                          role="generation", json_mode=True))
+    )
+    missing = [c for c in codes
+               if c.strip().lower() not in {str(p.get("fieldName", "")).strip().lower()
+                                            for p in placements}]
+    if missing:
+        # One corrective retry naming exactly what was dropped, as AUX does -
+        # the model intermittently returns only the first field under json mode.
+        retry = (
+            f"{plan}\n\nCORRECTION - your previous answer was INCOMPLETE: it omitted "
+            f"{', '.join(missing)}. Return ALL {len(codes)} fields: {', '.join(codes)}"
+        )
+        placements = _placements_from(
+            llm.parse_json(await llm.complete(prompts.FORM_FIELD_BUILDER, retry,
+                                              role="generation", json_mode=True))
+        )
+
+    ident = AppIdentity.from_config()
+    built = build_form_payload(placements, spec, ident)  # raises if still incomplete
+
+    async def commit(dry_run: bool) -> List[Any]:
+        return [("form.save", await qad_client.call("form.save", payload=built["payload"],
+                                                    dry_run=dry_run))]
+
+    return StageResult(
+        artifact={
+            "plan": plan,
+            "placements": placements,
+            "panels": built["summary"]["panels"],
+            "payload_preview": built["payload"],
+            "summary": built["summary"],
+        },
+        commit=commit,
+    )
+
+
+def _placements_from(parsed: Any) -> List[Dict[str, Any]]:
+    """Coerce the form-field builder's output into a flat placement list.
+
+    json_mode forces a top-level OBJECT, so the model does not return the bare
+    array the prompt asks for. Handles the shapes AUX documents observing
+    (aux_web_version/backend/pipeline.py:256-351).
+    """
+    def flatten(panels: List[Any]) -> List[Dict[str, Any]]:
+        out = []
+        for i, panel in enumerate(panels, start=1):
+            if not isinstance(panel, dict):
+                continue
+            pname = panel.get("panelName") or panel.get("name") or f"Panel {i}"
+            pnum = panel.get("panel", i)
+            for f in panel.get("fields", []) or []:
+                if isinstance(f, dict):
+                    out.append({
+                        "fieldName": f.get("fieldName") or f.get("name"),
+                        "panel": f.get("panel", pnum),
+                        "panelName": f.get("panelName", pname),
+                        "gridColumn": f.get("gridColumn", 0),
+                        "gridRow": f.get("gridRow", 0),
+                    })
+        return out
+
+    def is_panels(lst: Any) -> bool:
+        return isinstance(lst, list) and bool(lst) and all(
+            isinstance(x, dict) and "fields" in x for x in lst)
+
+    def is_flat(lst: Any) -> bool:
+        return isinstance(lst, list) and bool(lst) and all(
+            isinstance(x, dict) and "fieldName" in x and "panel" in x for x in lst)
+
+    if is_panels(parsed):
+        return flatten(parsed)
+    if is_flat(parsed):
+        return parsed
+    if isinstance(parsed, dict):
+        for v in parsed.values():
+            if is_panels(v):
+                return flatten(v)
+        for v in parsed.values():
+            if is_flat(v):
+                return v
+    raise StageError(
+        "The form-field builder did not return a usable placement list "
+        f"(got {type(parsed).__name__})."
+    )
+
+
+# ── Stage 4: event handler (conditional) ─────────────────────────────────────
+async def stage_handler(ctx: Dict[str, Any], instruction: str = "",
+                        browse_uris: Optional[Dict[str, str]] = None) -> StageResult:
+    from agents import prompts
+    import json as _json
+
+    spec = _need(ctx, "fields", "spec")
+    placements = _need(ctx, "form", "placements")
+
+    # The .p tells us whether there is anything to port. With no source, the
+    # planner proposes and the user may still skip.
+    hint = (ctx.get("requirements") or {}).get("handler_hint")
+    if hint is False:
+        return StageResult(
+            artifact={"needed": False},
+            skip=True,
+            skip_reason=("The parsed source contains no validation or event logic, so there "
+                         "is nothing to port. An empty handler would only add noise in QAD."),
+        )
+
+    bc = spec["bc_pascal"]
+    plan = await llm.complete(
+        prompts.EVENT_HANDLER_PLANNER,
+        f"BC Name: {bc}\nDescription: {spec.get('description','')}\n"
+        f"Fields: {_json.dumps(spec['fields'])}",
+        role="planning",
+    )
+
+    user = (f"BC Name: {bc}\n\nEvent Handler Plan:\n{plan}\n\n"
+            f"Field placements:\n{_json.dumps(placements)}")
+    if instruction:
+        user += f"\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
+
+    ts_raw = ehb.strip_fences(await llm.complete(prompts.TS_CODE_WRITER, user,
+                                                 role="generation"))
+    placeholders = ehb.extract_placeholders(ts_raw)
+
+    resolved = ehb.substitute_placeholders(ts_raw, browse_uris or {})
+    ts_code = resolved["code"]
+
+    artifact = {
+        "plan": plan,
+        "typescript": ts_code,
+        "typescript_raw": ts_raw,
+        "browse_placeholders": [p.to_dict() for p in placeholders],
+        "browse_uris_supplied": browse_uris or {},
+        "filled": resolved["filled"],
+        "skipped": resolved["skipped"],
+        "fully_resolved": resolved["fully_resolved"],
+    }
+
+    # Unfilled placeholders are not an error - the user may deliberately skip
+    # them, exactly as AUX does by commenting the call out. They just cannot be
+    # sent as-is, so the gate shows them and commit resolves them first.
+    async def commit(dry_run: bool) -> List[Any]:
+        js = await llm.complete(prompts.TS_COMPILER,
+                                f"Compile this TypeScript to ES5 JavaScript:\n\n{ts_code}",
+                                role="planning")
+        built = ehb.build_event_handler_payload(bc, ts_code, js, timing="BEFORE",
+                                                identity=AppIdentity.from_config())
+        return [("eventhandler.register",
+                 await qad_client.call("eventhandler.register",
+                                       payload=built["payload"], dry_run=dry_run))]
+
+    return StageResult(
+        artifact=artifact,
+        commit=commit,
+        warnings=([f"No Browse URI supplied for {', '.join(resolved['skipped'])} - "
+                   f"those lines are commented out, as AUX does."]
+                  if resolved["skipped"] else []),
+    )
+
+
+# ── Stage 5: view (ungated, deterministic) ───────────────────────────────────
+async def stage_view(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    spec = _need(ctx, "fields", "spec")
+    built = build_view_payload(spec, AppIdentity.from_config())
+
+    async def commit(dry_run: bool) -> List[Any]:
+        return [("view.register", await qad_client.call("view.register",
+                                                        payload=built["payload"],
+                                                        dry_run=dry_run))]
+
+    return StageResult(
+        artifact={"summary": built["summary"], "payload_preview": built["payload"]},
+        commit=commit,
+    )
+
+
+# ── Stage 6: lookups (conditional) ───────────────────────────────────────────
+async def stage_lookups(ctx: Dict[str, Any], instruction: str = "",
+                        configs: Optional[List[Dict[str, Any]]] = None) -> StageResult:
+    spec = _need(ctx, "fields", "spec")
+    bc_payload = _need(ctx, "fields", "payload_preview")
+    placements = _need(ctx, "form", "placements")
+    ident = AppIdentity.from_config()
+
+    wanted = [f for f in spec["fields"] if f.get("needsLookup") is True]
+    if not wanted and not configs:
+        return StageResult(
+            artifact={"lookups": []},
+            skip=True,
+            skip_reason="No field was marked as needing a lookup at the field stage.",
+        )
+
+    uris = lkb.field_uris_from_bc_payload(bc_payload)
+    bc = spec["bc_pascal"]
+
+    # Until configured, offer the choices rather than guessing: which fields
+    # want lookups, and what each could auto-populate.
+    if not configs:
+        return StageResult(artifact={
+            "awaiting_configuration": True,
+            "fields": [{
+                "code": f["code"],
+                "label": naming.to_display_label(f["code"]),
+                "auto_populate_options": lkb.auto_populate_targets(
+                    placements, bc, exclude_field=f["code"]),
+            } for f in wanted],
+            "hint": ("Point a lookup at a business component we created and the Browse URI, "
+                     "Result Field and Search Field are all derived. Pointing at a standard "
+                     "QAD component needs its Browse URI."),
+        })
+
+    built = []
+    for cfg in configs:
+        browse = lkb.BrowseTarget(
+            uri=cfg.get("browse_uri", ""),
+            label=cfg.get("browse_label", ""),
+            entity=cfg.get("browse_entity", ""),
+            result_field=cfg.get("result_field", ""),
+            search_field=cfg.get("search_field", ""),
+        )
+        built.append(lkb.build_lookup_payload(
+            lkb.LookupSpec(
+                field_code=cfg["field_code"],
+                browse=browse,
+                additional_results=cfg.get("additional_results", []),
+            ),
+            spec, uris, ident))
+
+    async def commit(dry_run: bool) -> List[Any]:
+        out = []
+        for b in built:
+            out.append(("lookup.create",
+                        await qad_client.call("lookup.create", payload=b["payload"],
+                                              dry_run=dry_run)))
+        return out
+
+    return StageResult(
+        artifact={
+            "lookups": [b["summary"] for b in built],
+            "payload_preview": [b["payload"] for b in built],
+        },
+        commit=commit,
+        warnings=sorted({u for b in built for u in b["unverified"]}),
+    )
+
+
+# ── Stage 7: deploy (terminal) ───────────────────────────────────────────────
+async def stage_deploy(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    spec = _need(ctx, "fields", "spec")
+    bc = spec["bc_pascal"]
+    built = build_deploy_payload(bc, AppIdentity.from_config())
+    dry_run = ctx["dry_run"]
+
+    # Run the warnings check NOW so the gate can show what QAD actually said.
+    # AUX fires this and throws the response away (pipeline.py:739).
+    #
+    # Audited but NON-LOCKING: this fires when the dialog is merely OPENED, not
+    # when it is approved. Treating it as a locking write would freeze the whole
+    # run the moment the user looked at the deploy screen.
+    warn = await qad_client.call("deploy.check_warnings",
+                                 payload=built["check_warnings"], dry_run=dry_run)
+    await store.record_write(ctx["run_id"], "deploy", "deploy.check_warnings",
+                             ok=warn.ok, dry_run=warn.dry_run, request=warn.request,
+                             response=None if warn.dry_run else warn.data,
+                             locking=False, **ctx.get("_db", {}))
+
+    async def commit(inner_dry_run: bool) -> List[Any]:
+        return [("deploy.business_entity",
+                 await qad_client.call("deploy.business_entity", payload=built["deploy"],
+                                       dry_run=inner_dry_run))]
+
+    return StageResult(
+        artifact={
+            "bc_pascal": bc,
+            "entity_uri": built["summary"]["entity_uri"],
+            "warnings_response": warn.to_dict(),
+            "payload_preview": built["deploy"],
+            "terminal": True,
+        },
+        commit=commit,
+        warnings=(["QAD's deployment warnings check did not succeed - read the response "
+                   "before approving."] if not warn.ok else []),
+    )
+
+
+RUNNERS = {
+    "requirements": stage_requirements,
+    "fields": stage_fields,
+    "form": stage_form,
+    "handler": stage_handler,
+    "view": stage_view,
+    "lookups": stage_lookups,
+    "deploy": stage_deploy,
+}
+
+
+# ── Orchestration ────────────────────────────────────────────────────────────
+async def run_stage(run_id: str, stage_id: str, instruction: str = "",
+                    db_path=None, **kwargs) -> Dict[str, Any]:
+    """Produce a stage's artifact. WRITES NOTHING - approving does that."""
+    db = {"db_path": db_path} if db_path else {}
+    stage = stages.get(stage_id)
+    ctx = await context(run_id, **db)
+
+    try:
+        result = await RUNNERS[stage_id](ctx, instruction=instruction, **kwargs)
+    except (StageError, llm.LLMError, ValueError) as exc:
+        await store.save_stage(run_id, stage_id, {"error": str(exc)},
+                               status=store.STAGE_FAILED, instruction=instruction,
+                               error=str(exc), **db)
+        await store.update_run(run_id, status=store.RUN_FAILED, error=str(exc), **db)
+        raise
+
+    if result.skip:
+        await store.save_stage(run_id, stage_id,
+                               {**result.artifact, "skip_reason": result.skip_reason},
+                               status=store.STAGE_SKIPPED, **db)
+        await store.set_stage_status(run_id, stage_id, store.STAGE_SKIPPED, **db)
+        logger.info("[RUN %s] stage '%s' skipped: %s", run_id, stage_id, result.skip_reason)
+        return {"stage": stage_id, "skipped": True, "reason": result.skip_reason}
+
+    status = store.STAGE_AWAITING if stage.gated else store.STAGE_RUNNING
+    await store.save_stage(run_id, stage_id, result.artifact, status=status,
+                           instruction=instruction, **db)
+    await store.update_run(run_id, current_stage=stage_id,
+                           status=store.RUN_AWAITING if stage.gated else store.RUN_RUNNING,
+                           **db)
+    if stage_id == "fields":
+        await store.update_run(run_id, bc_pascal=result.artifact.get("bc_pascal"), **db)
+
+    _PENDING[(run_id, stage_id)] = result
+    return {
+        "stage": stage_id,
+        "gated": stage.gated,
+        "artifact": result.artifact,
+        "warnings": result.warnings,
+        "writes": stage.writes,
+    }
+
+
+# Commit callables cannot be serialised, so the most recent result per stage is
+# held here. A process restart loses it, and approve() rebuilds by re-running
+# the stage - which is safe precisely because running never writes.
+_PENDING: Dict[Any, StageResult] = {}
+
+
+async def approve_stage(run_id: str, stage_id: str, db_path=None,
+                        **kwargs) -> Dict[str, Any]:
+    """Approve a stage: fire its writes, record them, and advance."""
+    db = {"db_path": db_path} if db_path else {}
+    stage = stages.get(stage_id)
+    run = await store.get_run(run_id, **db)
+    if not run:
+        raise StageError(f"No run '{run_id}'.")
+
+    result = _PENDING.get((run_id, stage_id))
+    if result is None:
+        # Rebuilt rather than failed: running a stage has no side effects.
+        await run_stage(run_id, stage_id, db_path=db_path, **kwargs)
+        result = _PENDING.get((run_id, stage_id))
+    if result is None:
+        raise StageError(f"Stage '{stage_id}' has produced nothing to approve.")
+
+    written = []
+    if result.commit is not None:
+        for endpoint_id, res in await result.commit(run["dry_run"]):
+            await store.record_write(run_id, stage_id, endpoint_id, ok=res.ok,
+                                     dry_run=res.dry_run, request=res.request,
+                                     response=res.data if not res.dry_run else None, **db)
+            written.append({"endpoint": endpoint_id, "ok": res.ok,
+                            "dry_run": res.dry_run, "error": res.error})
+            if not res.ok:
+                await store.set_stage_status(run_id, stage_id, store.STAGE_FAILED, **db)
+                await store.update_run(run_id, status=store.RUN_FAILED,
+                                       error=res.error, **db)
+                return {"stage": stage_id, "approved": False, "writes": written,
+                        "error": res.error}
+
+    await store.set_stage_status(run_id, stage_id, store.STAGE_APPROVED, **db)
+    nxt = stages.next_after(stage_id)
+    await store.update_run(
+        run_id,
+        current_stage=nxt.id if nxt else stage_id,
+        status=store.RUN_RUNNING if nxt else store.RUN_COMPLETE,
+        **db)
+    logger.info("[RUN %s] stage '%s' approved, %d write(s)", run_id, stage_id, len(written))
+    return {"stage": stage_id, "approved": True, "writes": written,
+            "next": nxt.id if nxt else None, "complete": nxt is None}
+
+
+async def regenerate_stage(run_id: str, stage_id: str, instruction: str = "",
+                           db_path=None, **kwargs) -> Dict[str, Any]:
+    """Re-run a stage with a free-text steer, if the lock permits it."""
+    db = {"db_path": db_path} if db_path else {}
+    allowed, reason = await store.can_regenerate(run_id, stage_id, **db)
+    if not allowed:
+        raise StageError(reason)
+    return await run_stage(run_id, stage_id, instruction=instruction,
+                           db_path=db_path, **kwargs)
+
+
+async def skip_stage(run_id: str, stage_id: str, reason: str = "",
+                     db_path=None) -> Dict[str, Any]:
+    """Skip a conditional stage without writing anything."""
+    db = {"db_path": db_path} if db_path else {}
+    stage = stages.get(stage_id)
+    if not stage.conditional_on:
+        raise StageError(
+            f"'{stage.label}' is not a conditional stage and cannot be skipped."
+        )
+    await store.save_stage(run_id, stage_id,
+                           {"skipped_by_user": True, "reason": reason},
+                           status=store.STAGE_SKIPPED, **db)
+    await store.set_stage_status(run_id, stage_id, store.STAGE_SKIPPED, **db)
+    nxt = stages.next_after(stage_id)
+    await store.update_run(run_id, current_stage=nxt.id if nxt else stage_id,
+                           status=store.RUN_RUNNING if nxt else store.RUN_COMPLETE, **db)
+    return {"stage": stage_id, "skipped": True, "next": nxt.id if nxt else None}
