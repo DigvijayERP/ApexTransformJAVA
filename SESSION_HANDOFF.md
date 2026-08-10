@@ -4,7 +4,7 @@
 sessions hit usage limits mid-task. This file exists so a **fresh session with zero context** can resume
 in minutes. Keep it current. If you change what you're doing, change this file in the same turn.
 
-**Last updated:** 2026-08-10 · **Phase 0 closed · Case 1 backend foundation built, run engine next**
+**Last updated:** 2026-08-10 · **Phase 0 closed · Case 1 backend COMPLETE and tested; API + frontend next**
 
 ---
 
@@ -52,41 +52,39 @@ Stage 4 is skipped when the ABL parse shows no validation or event logic to port
 `.p` itself tells us). With no source, the planner proposes and the user can skip.
 Stage 6 skips itself when nothing was marked at stage 2.
 
-### Done — backend foundation, verified
+### Done — the whole backend, verified
 
-`core/config.py` · `core/stages.py` · `core/store.py` · `qad_client.py` ·
-`builders/{identity,naming,bc,form,view,deploy,event_handler,lookup}`.
+| Piece | Where |
+|---|---|
+| Config, QAD client, 6 payload builders, stage manifest | `core/config.py`, `qad_client.py`, `builders/` |
+| Per-stage artifact store + regeneration lock | `core/store.py` |
+| Run engine — 7 stage functions, run/approve/regenerate/skip | `core/engine.py` |
+| All eight prompts, as **templates** | `agents/prompts.py` |
+| Docs grounding — all four bundles found | `core/docs_loader.py` |
+| Read-only environment check | `verify_environment.py` |
 
-**225 offline assertions pass. Run all three after any change — no network, no credentials,
-no API key:**
+**225 offline assertions pass. Run all three after any change — no network, no credentials, no key:**
 
 ```bash
 cd backend && python smoke_test.py && python store_test.py && python pipeline_test.py
 ```
 
-`pipeline_test.py` is the one that matters most: it drives all seven stages end to end through the
-real engine, real builders and real store with only the MODEL stubbed. The others test pieces in
-isolation; this one catches **chaining** bugs — and it found two on its first run.
+Three things a fresh session should understand before changing anything here:
 
-`store.py` holds the regeneration lock. Its rule: a stage may be regenerated only while no
-**successful live** write has fired at that stage or any stage after it. Dry-run writes never lock
-(nothing left the process) and rejected writes never lock (QAD changed nothing).
+**`pipeline_test.py` matters most.** It drives all seven stages end to end through the real engine,
+real builders and real store with only the MODEL stubbed. The other two test pieces in isolation;
+this one catches **chaining** bugs, and it found two on its first run.
 
-### Done
+**`store.py` holds the regeneration lock.** A stage may be regenerated only while no *successful,
+live, locking* write has fired at that stage or any stage after it. Dry-run writes never lock (nothing
+left the process); rejected writes never lock (QAD changed nothing); and calls a stage makes while
+merely *rendering* a gate never lock — otherwise opening the deploy dialog would freeze the whole run.
 
-| ✅ | Piece | Where |
-|---|---|---|
-| ✅ | Config, QAD client, 6 payload builders, stage manifest | `core/config.py`, `qad_client.py`, `builders/` |
-| ✅ | Per-stage artifact store + regeneration lock | `core/store.py` |
-| ✅ | Run engine — 7 stage functions, run/approve/regenerate/skip | `core/engine.py` |
-| ✅ | All eight prompts, as **templates** | `agents/prompts.py` |
-| ✅ | Docs grounding — all four bundles found | `core/docs_loader.py` |
-
-Prompts are templates, not constants, for a specific reason: AUX hardcodes `com.extensions.customapp`
-in **four places inside the TypeScript module the model is told to emit** (`prompts.py:259,265,266,326`).
-Copying it verbatim would generate handlers in AUX's namespace on our app — silently, visible only
-inside QAD. `render()` substitutes our identity (including the `ComYashDigwish` and `com_yash_digwish`
-forms), and a test asserts AUX's namespace never appears in a rendered prompt.
+**Prompts are templates, not constants.** AUX hardcodes `com.extensions.customapp` in **four places
+inside the TypeScript module the model is told to emit** (`prompts.py:259,265,266,326`). Copying it
+verbatim would generate handlers in AUX's namespace on our app — silently, visible only inside QAD.
+`render()` substitutes our identity (including the `ComYashDigwish` and `com_yash_digwish` forms), and
+a test asserts AUX's namespace never appears in a rendered prompt.
 
 ### Next
 
