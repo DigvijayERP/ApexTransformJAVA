@@ -21,6 +21,7 @@ from core import config, stages
 from builders.identity import AppIdentity
 from builders import naming
 from builders import event_handler_builder as eh
+from builders import lookup_builder as lk
 from builders.bc_builder import build_bc_payload, patch_dropdown_fields
 from builders.form_builder import build_form_payload
 from builders.view_builder import build_view_payload
@@ -249,18 +250,85 @@ def main() -> int:
         check("unfilled placeholder blocks the POST",
               "unfilled Browse URI placeholders" in str(exc), True)
 
-    section("12. Stage manifest")
-    check("six stages", stages.total(), 6)
+    section("12. Lookup Definition — derived for our own BC")
+    uris = lk.field_uris_from_bc_payload(bc["payload"])
+    check("field URIs harvested from the BC payload we built",
+          uris["customerName"],
+          "urn:field:com.yash.digwish.SmokeOrder.ISmokeOrder:SmokeOrder.customerName")
+
+    # Pointing at a BC we created: nothing to type.
+    target = lk.BrowseTarget.for_own_bc("Training", "className", ident)
+    check("browse URI derived", target.uri,
+          "urn:browse:bebrowse:com.yash.digwish.training")
+    check("result field is a dotted path", target.result_field, "training.className")
+    check("search field matches", target.search_field, "training.className")
+    check("derived target is usable", target.problems(), [])
+
+    # C4:219-221 — auto-populate targets are form_builder's AutoField names.
+    targets = lk.auto_populate_targets(PLACEMENTS, "SmokeOrder", exclude_field="orderCode")
+    check("auto-populate list excludes the lookup's own field",
+          "orderCode" in [t["field_code"] for t in targets], False)
+    check("auto-populate target is a form field name",
+          [t["target"] for t in targets if t["field_code"] == "orderDate"],
+          ["SmokeOrder_orderDateAutoField2"])
+
+    built = lk.build_lookup_payload(
+        lk.LookupSpec(
+            field_code="customerName",
+            browse=target,
+            additional_results=[{"field": "training.location",
+                                 "target": "SmokeOrder_quantityAutoField2"}],
+        ),
+        SPEC, uris, ident)
+    row = built["payload"]["lookups"][0]
+    check("fieldSet reuses the BC's own field URI", row["fieldSet"], uris["customerName"])
+    check("namespace", row["namespace"], "com.yash.digwish")
+    check("appName", row["appName"], "digwish")
+    check("reference empty, per the confirmed record", row["reference"], "")
+    check("qualifiers empty for a static lookup", row["lookupQualifiers"], [])
+    check("auto-populate carried through", len(row["lookupResultFields"]), 1)
+    check("unverified items are reported, not hidden", len(built["unverified"]), 2)
+
+    section("13. Lookup — refuses to send an incomplete config")
+    blank = lk.BrowseTarget(uri="", label="X", entity="x", result_field="", search_field="")
+    check("blank browse target reports 3 problems", len(blank.problems()), 3)
+    bare = lk.BrowseTarget(uri="urn:browse:bebrowse:a.b", label="X", entity="x",
+                           result_field="className", search_field="className")
+    check("bare column rejected as not dotted", len(bare.problems()), 2)
+    try:
+        lk.build_lookup_payload(lk.LookupSpec(field_code="customerName", browse=blank),
+                                SPEC, uris, ident)
+        check("incomplete lookup raises", False, True)
+    except ValueError as exc:
+        check("incomplete lookup raises", "not ready to send" in str(exc), True)
+    try:
+        lk.build_lookup_payload(lk.LookupSpec(field_code="nosuchfield", browse=target),
+                                SPEC, uris, ident)
+        check("unknown field raises", False, True)
+    except ValueError as exc:
+        check("unknown field raises", "No field URI known" in str(exc), True)
+
+    section("14. Stage manifest")
+    check("seven stages", stages.total(), 7)
     check("stage order", [s.id for s in stages.STAGES],
-          ["requirements", "fields", "form", "handler", "view", "deploy"])
+          ["requirements", "fields", "form", "handler", "view", "lookups", "deploy"])
     check("handler sits between form and view", stages.next_after("form").id, "handler")
     check("view follows handler", stages.next_after("handler").id, "view")
+    check("lookups sit before deploy", stages.next_after("lookups").id, "deploy")
     check("view stage is ungated", stages.get("view").gated, False)
     check("every other stage is gated",
           all(s.gated for s in stages.STAGES if s.id != "view"), True)
+    check("handler is conditional", stages.get("handler").conditional_on, "handler_needed")
+    check("lookups are conditional",
+          stages.get("lookups").conditional_on, "any_field_needs_lookup")
+    check("exactly two conditional stages",
+          [s.id for s in stages.STAGES if s.conditional_on],
+          ["handler", "lookups"])
+    check("a plain BC therefore runs five stages",
+          len([s for s in stages.STAGES if not s.conditional_on]), 5)
     check("fields stage writes 3 endpoints", len(stages.get("fields").writes), 3)
     check("downstream of fields", [s.id for s in stages.stages_after("fields")],
-          ["form", "handler", "view", "deploy"])
+          ["form", "handler", "view", "lookups", "deploy"])
     check("deploy is terminal", stages.next_after("deploy"), None)
     known = set(config.list_endpoints())
     referenced = {w for s in stages.STAGES for w in s.writes}

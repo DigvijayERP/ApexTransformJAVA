@@ -30,28 +30,46 @@ The authoritative brief is the "Adaptive Java version — build brief" the owner
 
 ## 2. ▶ EXACT NEXT ACTION
 
-**Building Case 1 (standalone BC creation), 6 stages, step-gated.** Server-side/JEF comes later.
+**Building Case 1 (standalone BC creation), step-gated. Pipeline shape is FINAL.** Server-side/JEF later.
 Background and the full inventory: **[PHASE2_CASE1_BUILD_PLAN.md](PHASE2_CASE1_BUILD_PLAN.md)**.
-Note that plan's 16-gate table is **superseded** — the owner has since defined a 6-stage shape
-(requirements / fields / form / handler / view / deploy), which `backend/core/stages.py` now implements
-and is authoritative. Event handlers ARE in Case 1, after form creation, and the stage-4 dialog collects
-real Browse URIs rather than shipping the lookup commented out the way AUX does.
+That plan's 16-gate table is **superseded.** `backend/core/stages.py` is authoritative:
+
+| # | Stage | Gated | Writes on approval | Runs |
+|---|---|---|---|---|
+| 1 | Requirement gathering | yes | — | always |
+| 2 | Field mapping | yes | BC create (+ dropdown wiring if the spec has dropdowns) | always |
+| 3 | Form creation | yes | Form save | always |
+| 4 | Event handler | yes | Handler register | **only if needed** |
+| 5 | View creation | no | View register | always |
+| 6 | Lookups | yes | Lookup Definitions | **only if a field wants one** |
+| 7 | Deploy | yes | Warnings check, then deploy | always |
+
+**A plain BC runs FIVE stages; a full one runs seven**, plus a recovery dialog that appears only when
+QAD rejects the create. The stage list is per-run — anything rendering it must read the run's actual
+list, never a fixed table. That is precisely what AUX gets wrong.
+
+Stage 4 is skipped when the ABL parse shows no validation or event logic to port (owner's call: the
+`.p` itself tells us). With no source, the planner proposes and the user can skip.
+Stage 6 skips itself when nothing was marked at stage 2.
 
 ### Done — backend foundation, verified
 
 `core/config.py` · `core/stages.py` · `qad_client.py` ·
-`builders/{identity,naming,bc,form,view,deploy,event_handler}` · `smoke_test.py`.
-**77 offline assertions pass** (`cd backend && python smoke_test.py`) — no network, no credentials
+`builders/{identity,naming,bc,form,view,deploy,event_handler,lookup}` · `smoke_test.py`.
+**100 offline assertions pass** (`cd backend && python smoke_test.py`) — no network, no credentials
 needed. Run it after any change to config, identity or the builders.
 
 ### Next — the run engine
 
 1. Per-stage artifact store (SQLite, keyed `run_id` + `stage_id`) — nothing can be shown at a gate or
    regenerated from without it.
-2. The six stage functions, each reading/writing that store. Stage 4 also needs the LLM prompt ported
-   with the `{{BROWSE_URI:field}}` convention replacing AUX's comment-it-out instruction.
-3. `POST /api/run/{id}/stage/{stage}` + approve / regenerate-with-input endpoints.
-4. Frontend `RunContext` (`useReducer`, no Zustand) + the stage dialog.
+2. The seven stage functions, each reading/writing that store. Stage 4 also needs the LLM prompt
+   ported with the `{{BROWSE_URI:field}}` convention replacing AUX's comment-it-out instruction.
+3. **Port the ABL parsers** — `progress_parser.py` (414 lines, parses ABL source) and
+   `lookup_detector.py` (585 lines). They feed four stages: requirements, the field spec, whether a
+   handler is needed, and lookup candidates. Both are untracked in-flight work in AUX.
+4. `POST /api/run/{id}/stage/{stage}` + approve / regenerate-with-input endpoints.
+5. Frontend `RunContext` (`useReducer`, no Zustand) + the stage dialog.
 
 **Dry-run is the default and stays so until the owner greenlights live writes.**
 
@@ -67,8 +85,8 @@ needed. Run it after any change to config, identity or the builders.
 | 6 | **Q-F** — permission + which environment for the grid-claiming experiment | Phase 5 design |
 
 **Settled by the owner:** identity values (`digwish`, `urn:datastore:com.yash.extension`); the
-regeneration rule (free before a write executes, blocked after); the 6-stage shape with stage 5 (view)
-ungated; event handlers stay in Case 1 with user-supplied Browse URIs.
+regeneration rule (free before a write executes, blocked after); the 7-stage shape with view ungated;
+event handlers stay in Case 1 with user-supplied Browse URIs; lookups added as a conditional stage.
 
 **Phase 1's settings panel is deferred behind Case 1**, at the owner's direction. The config layer it
 would edit already exists and works without a UI.
@@ -85,11 +103,13 @@ changes; an owner decision is not.
 | Q-H | Environment values supplied (see §4) | **owner** |
 | — | Phase 0 closed; proceed to Phase 1 | **owner** |
 | Q-A | **No Zustand.** Run state = `useReducer`-based `RunContext` alongside `AuthProvider`. AUX has no Zustand — three runtime deps only, verified twice | delegated |
-| Q-D | ~~Sub-step ids on AUX's 14-step numbering~~ — **superseded.** The owner replaced the whole shape with 6 stages, which dissolves the problem: `core/stages.py` is now the single source of stage identity and the frontend keeps no table | **owner** |
+| Q-D | ~~Sub-step ids on AUX's 14-step numbering~~ — **superseded.** The owner replaced the whole shape with 7 stages, which dissolves the problem: `core/stages.py` is now the single source of stage identity and the frontend keeps no table | **owner** |
 | Q-F | Grid-claiming experiment deferred to live testing, and must run **two arms** (see §6) | delegated |
 | Q-B | Phase 2 transport = **per-step request/response**, modelled on SSS, not a paused SSE stream | delegated *(proposed, not yet exercised)* |
 | Q-C | Gate every stage except view; QAD-write stages gate **before** the write, showing the payload | **owner** |
-| — | **6-stage shape**, view ungated, event handlers included after form creation | **owner** |
+| — | **7-stage shape** — requirements/fields/form/handler/view/lookups/deploy. View ungated. Handler and lookups conditional, so a plain BC runs five | **owner** |
+| — | Handler need is decided from the **ABL parse**, not asked: the `.p` shows whether there is validation or event logic to port | **owner** |
+| — | Lookups marked at stage 2, configured at stage 6; **before deploy**, swap if QAD rejects an undeployed BC | **owner** |
 | — | **Browse URIs collected from the user** at stage 4 instead of AUX's commented-out `api/TODO/provide-endpoint` | **owner** |
 | — | Regeneration free before a write executes, blocked after (QAD has no undo) | **owner** |
 | — | `git init` the repo; `.gitignore` before first commit | delegated |

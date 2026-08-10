@@ -14,17 +14,31 @@ hardcodes TOTAL_STEPS in three places. A gate that shows the wrong stage name
 collects approval for the wrong artifact, so identity lives in exactly one
 place here.
 
-STAGE SHAPE (owner's design, 2026-08-10):
+STAGE SHAPE (owner's design, finalised 2026-08-10):
 
-    1 Requirements   gated, no write
-    2 Fields         gated -> approving POSTS the BC
-    3 Form           gated -> approving POSTS the form
-    4 Handler        gated -> approving POSTS the event handler
-    5 View                  -> POSTS the view, NO approval
-    6 Deploy         gated -> approving DEPLOYS
+    1 Requirements   gated, no write            ALWAYS
+    2 Fields         gated -> POSTS the BC       ALWAYS
+    3 Form           gated -> POSTS the form     ALWAYS
+    4 Handler        gated -> POSTS the handler  ONLY IF NEEDED
+    5 View                  -> POSTS the view    ALWAYS, no approval
+    6 Lookups        gated -> POSTS lookups      ONLY IF ANY FIELD WANTS ONE
+    7 Deploy         gated -> DEPLOYS            ALWAYS
+
+So a plain business component runs FIVE stages; a fully-featured one runs seven,
+plus a recovery dialog that appears only when QAD rejects the create. THE STAGE
+LIST IS PER-RUN. Anything rendering it must read the run's actual list, never a
+fixed table — which is the specific thing AUX gets wrong, and why its frontend
+cannot render its own embedded step 8.
 
 Stage 4 sits between form and view, matching AUX's ordering (its steps 8-11 run
 after the form save at step 7 and before the view at 12-13).
+
+Stage 6 sits before deploy by the owner's decision, so that deploy stays
+terminal. This placement is UNVALIDATED: AUX put lookups here too but never
+actually POSTed one, and the platform guide's worked example creates a lookup on
+an already-deployed BC (class 4, pages 3-15). If QAD rejects a Lookup Definition
+against an undeployed BC, stages 6 and 7 swap and deploy stays terminal only for
+regeneration. One live run settles it.
 
 The gate sits BEFORE each write, showing the exact payload. Approving is what
 fires the write. That is stricter than approving a receipt afterwards, and it
@@ -127,6 +141,11 @@ STAGES: List[Stage] = [
         artifact_kind="handler_code",
         editable=True,
         locks_upstream=True,
+        # Not every customisation needs a handler. When ABL source was supplied,
+        # the parse tells us whether there is any validation or event logic to
+        # port, and that drives the default. With no source, the planner
+        # proposes and the user can skip. An empty handler in QAD is noise.
+        conditional_on="handler_needed",
     ),
     Stage(
         id="view",
@@ -143,8 +162,28 @@ STAGES: List[Stage] = [
         locks_upstream=True,
     ),
     Stage(
-        id="deploy",
+        id="lookups",
         number=6,
+        label="Lookups",
+        description=(
+            "Create a QAD Lookup Definition for each field marked as needing one at "
+            "the field stage. When the lookup points at a business component we "
+            "created, the browse URI and the result/search fields are derived — "
+            "nothing to type. Pointing at a standard QAD component needs its Browse "
+            "URI, which you supply here. Optionally choose other form fields to "
+            "auto-populate when a value is picked."
+        ),
+        gated=True,
+        writes=["lookup.create"],
+        artifact_kind="lookup_config",
+        editable=True,
+        locks_upstream=True,
+        # Skips itself entirely when no field was marked at the field stage.
+        conditional_on="any_field_needs_lookup",
+    ),
+    Stage(
+        id="deploy",
+        number=7,
         label="Deploy",
         description=(
             "Show QAD's deployment warnings and the exact deploy payloads, then "
