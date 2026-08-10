@@ -30,24 +30,28 @@ The authoritative brief is the "Adaptive Java version — build brief" the owner
 
 ## 2. ▶ EXACT NEXT ACTION
 
-**Waiting on the owner** to confirm the static-vs-dynamic classification in
-[PHASE1_REGISTRY.md](PHASE1_REGISTRY.md) (§"The classification — please confirm").
+**Owner has directed: build Case 1 (standalone BC creation) first, step-gated. Server-side/JEF comes
+later.** The full inventory is in **[PHASE2_CASE1_BUILD_PLAN.md](PHASE2_CASE1_BUILD_PLAN.md)** — read it
+before writing any code; it has the 16-gate table, the hardcoded-identity list, and the build order.
 
-Once confirmed → build the Phase 1 **settings panel** (UI that reads and writes
-`config/endpoints.json` + `config/environment.json`).
-
-**Do not start Phase 2** until Phase 1's exit criteria are met and the owner approves. Phase gates are a
-standing rule, not a suggestion.
+**Waiting on the owner for six inputs (§5 of that plan).** Build order item 1 can start as soon as
+`QAD_USERNAME`/`QAD_PASSWORD` land; items 2+ need `APP_NAME` and `DATASTORE_URI`.
 
 ### Blocked on the owner (cannot proceed without)
 
 | # | Needed | Blocks |
 |---|---|---|
-| 1 | Confirm the static/dynamic classification | Phase 1 panel |
-| 2 | `QAD_USERNAME`, `QAD_PASSWORD` → `backend/.env` | Any live call |
-| 3 | `OPENAI_API_KEY` → `backend/.env` | Any generation |
-| 4 | **Q-L** — did `probe_parent_eh.py` ever run, and what did it return? | Phase 5 design |
-| 5 | **Q-F** — permission + which environment for the grid-claiming experiment | Phase 5 design |
+| 1 | **`APP_NAME`** for `com.yash.digwish` — must match QAD's app list | Every BC + view payload |
+| 2 | **`DATASTORE_URI`** for the Adaptive environment | The final deploy call |
+| 3 | `QAD_USERNAME`, `QAD_PASSWORD` → `backend/.env` | Any live call |
+| 4 | `OPENAI_API_KEY` → `backend/.env` | Steps 1, 2, 5, 6, 8, 9, 10 |
+| 5 | 🔴 **Regeneration after a QAD write** — see plan §4 | The whole Phase 2 state machine |
+| 6 | Confirm the Phase 1 static/dynamic classification | Settings panel shape |
+| 7 | **Q-L** — did `probe_parent_eh.py` ever run, and what did it return? | Phase 5 design |
+| 8 | **Q-F** — permission + which environment for the grid-claiming experiment | Phase 5 design |
+
+**Phase 1's settings panel is deferred behind Case 1**, at the owner's direction. The config layer it
+would edit already exists and is usable without a UI.
 
 ---
 

@@ -290,6 +290,42 @@ reference. One line to move if the owner prefers the JEF convention.
 classification to be confirmed by the owner *before* it is assumed, so building UI around an
 unconfirmed classification would be exactly the assumption rule 2 forbids.
 
+### Case 1 build inventory (2026-08-10)
+
+**Owner direction:** build **Case 1 — standalone BC creation** first, step-gated, and come to
+server-side/JEF later. Phase 1's settings *panel* is deferred behind it; the config layer it edits
+already exists and works without a UI.
+
+Full inventory in **`PHASE2_CASE1_BUILD_PLAN.md`**. Produced by re-reading the AUX source firsthand this
+session — `pipeline.py` in full (802 lines), all five builders, `qad_client.py`, `core/config.py` — not
+from the audit summary.
+
+**What ports cleanly:** ~1,560 lines of proven payload-construction logic (5 builders + 8 LLM prompts +
+the real `tsc` gate + the docs loader). None of it needs reinventing.
+
+**What must be reconfigured — the owner's instinct was right.** Endpoints were the easy half.
+`com.extensions.customapp` is hardcoded in **five files, ten places**, and *every* URI in *every*
+payload derives from it (entity, module, bdoc, viewmeta, hybridbrowse, bebrowse, field). `MODULE` and
+`MODULE_SHORT` derive mechanically from the supplied app URI; **two values do not derive and are now
+blocking inputs — `APP_NAME` and `DATASTORE_URI`.**
+
+**What is a rewrite, not a UI feature.** `run_pipeline` is one async generator holding every artifact in
+a local variable; a generator cannot suspend across HTTP requests. Each step becomes a standalone
+function reading/writing a per-step artifact store. That store is the prerequisite — without it there is
+nothing to display at a gate and nothing to regenerate from.
+
+**Case 1 has 16 gates, and the list is variable, not fixed** — step 4 fires only on a step-3 rejection,
+3a only with dropdown fields, 13a only when lookups are detected. Every QAD write gates **before** it
+fires, showing the exact payload.
+
+🔴 **Design blocker raised for the owner: regeneration after a QAD write has already executed.**
+Decision 2 says regenerating re-runs all downstream steps — but once step 3 has run, the BC exists in
+QAD and re-running it fails. AUX's own code proves it (`pipeline.py:226-231`, `:450`: a name collision
+"cannot be repaired by editing fields"). QAD has no undo and Phase 0 found no delete path. Suggested
+rule recorded in the plan §4. **Sub-question left explicitly untested rather than assumed:** whether
+`viewMetadataV2`, `eventhandler`, `viewResourceMetadatas` and the deploy pair are idempotent. One live
+run settles it.
+
 ---
 
 ## Deferrals — named, not silently dropped (working rule 6)
