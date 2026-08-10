@@ -80,14 +80,14 @@ async def context(run_id: str, **db) -> Dict[str, Any]:
 
 
 def _docs_bundle(name: str) -> str:
-    """Grounding docs for a prompt.
+    """Grounding docs for a prompt, wrapped with the heading prompts expect.
 
-    The docs loader is not ported yet. Returning empty is correct meanwhile —
-    the prompt renders without a docs section rather than with a broken one —
-    but it does mean handler generation is currently UNGROUNDED, which is worth
-    knowing when judging the output at the stage-4 gate.
+    Returns "" when the bundle is empty, so an absent bundle leaves no dangling
+    heading behind. Whether a bundle is actually grounded is reported by
+    `docs_loader.diagnose()` rather than left to be inferred from bad output.
     """
-    return ""
+    from core.docs_loader import docs_loader
+    return docs_loader.as_prompt_context(name)
 
 
 def _need(ctx: Dict[str, Any], stage_id: str, what: str) -> Any:

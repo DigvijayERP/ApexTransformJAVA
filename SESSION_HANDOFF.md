@@ -57,7 +57,7 @@ Stage 6 skips itself when nothing was marked at stage 2.
 `core/config.py` · `core/stages.py` · `core/store.py` · `qad_client.py` ·
 `builders/{identity,naming,bc,form,view,deploy,event_handler,lookup}`.
 
-**212 offline assertions pass. Run all three after any change — no network, no credentials,
+**225 offline assertions pass. Run all three after any change — no network, no credentials,
 no API key:**
 
 ```bash
@@ -80,6 +80,7 @@ isolation; this one catches **chaining** bugs — and it found two on its first 
 | ✅ | Per-stage artifact store + regeneration lock | `core/store.py` |
 | ✅ | Run engine — 7 stage functions, run/approve/regenerate/skip | `core/engine.py` |
 | ✅ | All eight prompts, as **templates** | `agents/prompts.py` |
+| ✅ | Docs grounding — all four bundles found | `core/docs_loader.py` |
 
 Prompts are templates, not constants, for a specific reason: AUX hardcodes `com.extensions.customapp`
 in **four places inside the TypeScript module the model is told to emit** (`prompts.py:259,265,266,326`).
@@ -89,16 +90,13 @@ forms), and a test asserts AUX's namespace never appears in a rendered prompt.
 
 ### Next
 
-1. ⚠️ **Port the docs loader.** `_docs_bundle()` in `engine.py` returns empty, so **handler generation
-   is currently UNGROUNDED**. Note AUX's loader reads `.txt` only, while Adaptive's `Docs/` are `.md` —
-   a straight port would silently find nothing.
-2. **Port the ABL parsers** — `progress_parser.py` (414 lines) and `lookup_detector.py` (585). They
+1. **Port the ABL parsers** — `progress_parser.py` (414 lines) and `lookup_detector.py` (585). They
    feed four stages: requirements, the field spec, whether a handler is needed, and lookup candidates.
    Both are untracked in-flight work in AUX. Until then, `handler_hint` comes from the model's
    `HANDLER_NEEDED:` line rather than from the source.
-3. **The API layer** — `POST /api/run/{id}/stage/{stage}` plus approve / regenerate / skip.
-4. **The frontend** — `RunContext` (`useReducer`, no Zustand) and the stage dialog.
-5. **First live call**: `python verify_environment.py <entityURI>` — read-only, writes nothing.
+2. **The API layer** — `POST /api/run/{id}/stage/{stage}` plus approve / regenerate / skip.
+3. **The frontend** — `RunContext` (`useReducer`, no Zustand) and the stage dialog.
+4. **First live call**: `python verify_environment.py <entityURI>` — read-only, writes nothing.
 
 **Dry-run is the default and stays so until the owner greenlights live writes.**
 

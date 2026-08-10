@@ -308,7 +308,49 @@ def main() -> int:
     except ValueError as exc:
         check("unknown field raises", "No field URI known" in str(exc), True)
 
-    section("14. Stage manifest")
+    section("14. Docs grounding")
+    from core.docs_loader import docs_loader, BUNDLES, READABLE_SUFFIXES
+    # AUX's loader globs *.txt only; every file in Adaptive's Docs/ is .md, so a
+    # straight port would have found nothing and said nothing about it.
+    check("markdown is readable", ".md" in READABLE_SUFFIXES, True)
+    diag = docs_loader.diagnose()
+    check("every bundle is grounded", diag["ungrounded"], [])
+    check("Docs root found", diag["roots"]["docs"]["exists"], True)
+
+    handler_files = docs_loader.files_for("client_extension_event_handler")
+    check("handler bundle uses the event-handler guide",
+          any("class_7_Event_Handlers" in f for f in handler_files), True)
+    ctx = docs_loader.as_prompt_context("client_extension_event_handler")
+    check("wrapped with the heading prompts expect",
+          ctx.startswith("## QAD Platform Reference Docs"), True)
+    check("and carries real content", len(ctx) > 10_000, True)
+
+    # An unknown bundle must not raise into a run - it degrades, loudly logged.
+    check("unknown bundle returns empty", docs_loader.get_bundle("nope"), "")
+    check("and leaves no dangling heading", docs_loader.as_prompt_context("nope"), "")
+
+    # Every guide in Docs/ should fit whole; only class 3 is meant to be trimmed.
+    check("no bundle was truncated",
+          [b["name"] for b in diag["bundles"] if "[TRUNCATED" in
+           docs_loader.get_bundle(b["name"])], [])
+
+    # The corpus root is optional enrichment; its absence must not mark a
+    # bundle ungrounded, or the handler bundle would read as broken.
+    check("corpus is optional", diag["roots"]["corpus"]["exists"], False)
+    check("yet the handler bundle is still grounded",
+          [b["grounded"] for b in diag["bundles"]
+           if b["name"] == "client_extension_event_handler"], [True])
+
+    section("15. Prompts render grounded")
+    from agents import prompts
+    rendered = prompts.render(prompts.TS_CODE_WRITER, docs_context=ctx)
+    check("docs injected into the prompt",
+          "QAD Platform Reference Docs" in rendered, True)
+    ungrounded = prompts.render(prompts.TS_CODE_WRITER)
+    check("and no dangling token when absent",
+          "{QAD_DOCS_CONTEXT}" in ungrounded, False)
+
+    section("16. Stage manifest")
     check("seven stages", stages.total(), 7)
     check("stage order", [s.id for s in stages.STAGES],
           ["requirements", "fields", "form", "handler", "view", "lookups", "deploy"])
