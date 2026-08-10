@@ -36,13 +36,17 @@ new-BC pipeline (`pipeline.py:685`), while server-side generation is a **separat
 
 ## Phases
 
-### Phase 0 — Read-only audit ✅ delivered, awaiting review
+### Phase 0 — Read-only audit ✅ **CLOSED** (owner greenlight 2026-08-10)
 Produce `PHASE0_AUDIT.md` and `QUESTIONS.md`. No application code.
 
 **Exit criteria:** all 8 required items answered with file-path/code references; inferences labelled;
 zero application code. → See `PROGRESS.md` for the honest status against each criterion.
 
-### Phase 1 — Endpoint and settings registry
+### Phase 1 — Endpoint and settings registry 🔄 **IN PROGRESS**
+**Done:** config layer — `config/endpoints.json` (20 endpoints, per phase/case, each with `source`
+provenance), `config/environment.json`, `backend/.env.example`. See `PHASE1_REGISTRY.md`.
+**Outstanding:** owner confirmation of the static-vs-dynamic classification, then the settings panel.
+
 Settings panel holding every endpoint and URI, **segregated by phase/case**. Real values supplied by the
 commissioner — none invented. Static-vs-dynamic classification presented for confirmation, not assumed.
 Environment identity (base URL, client ID, app URI) lives here. Config safe to commit is separated from

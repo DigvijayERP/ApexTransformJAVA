@@ -8,12 +8,17 @@ generation for embedded grids. See `PLAN.md` for the phase plan and standing con
 
 ## ▶ RESUME POINT (new session, start here)
 
-**Where we are:** Phase 0 **not closed**. Deliverables: `PHASE0_SUMMARY.md` (18 KB — **read this one**),
-`PHASE0_AUDIT.md` (583 KB reference appendix), `QUESTIONS.md` (12 decisions, triaged by what they block),
-`PLAN.md`, this file. No application code exists.
+> **New session? Read [SESSION_HANDOFF.md](SESSION_HANDOFF.md) first.** It is the short
+> read-this-first file: current phase, exact next action, who decided what, and the traps.
+> This file is the full log behind it.
 
-**Next action:** read `PHASE0_SUMMARY.md`, then answer the triaged blocking subset in `QUESTIONS.md` —
-**Q-L, Q-D, Q-H** if answering only three. Do not start Phase 1 before that.
+**Where we are:** Phase 0 **closed by owner greenlight 2026-08-10**. Phase 1 **in progress** — the
+config layer is built and awaiting one confirmation. The repo is now under git (initialised
+2026-08-10, first commit `9fe95e2`).
+
+**Next action:** owner confirms the static-vs-dynamic classification in
+[PHASE1_REGISTRY.md](PHASE1_REGISTRY.md); then build the Phase 1 settings **panel**. Also still
+needed from the owner: `QAD_USERNAME`, `QAD_PASSWORD`, `OPENAI_API_KEY` → `backend/.env`.
 
 **Read-order note:** `PHASE0_AUDIT.md` at 583 KB is not readable end to end and is not meant to be.
 `PHASE0_SUMMARY.md` carries one section per audit item, one line per pipeline step, every claim tagged
@@ -65,9 +70,9 @@ correct sweep is `grep -rn "qad_client\|get_qad\|post_qad" backend --include=*.p
 
 | Phase | Scope | State |
 |-------|-------|-------|
-| 0 | Read-only audit of AUX + Adaptive Docs → `PHASE0_AUDIT.md`, `QUESTIONS.md` | ✅ Delivered — ⏳ pending review; verification pass outstanding |
-| 1 | Endpoint and settings registry, segregated per phase | ⬜ Not started — blocked on Phase 0 approval + real values (Q-H) |
-| 2 | Step-gated approval flow across all three cases | ⬜ Not started — blocked on Q-A/Q-B/Q-C/Q-D |
+| 0 | Read-only audit of AUX + Adaptive Docs → `PHASE0_AUDIT.md`, `QUESTIONS.md` | ✅ **Closed** — owner greenlight 2026-08-10. 11/15 sections citation-verified |
+| 1 | Endpoint and settings registry, segregated per phase | 🔄 **In progress** — config layer done (20 endpoints); classification awaiting owner confirmation; panel not started |
+| 2 | Step-gated approval flow across all three cases | ⬜ Not started — Q-A/Q-B/Q-C/Q-D now have delegated answers (see `SESSION_HANDOFF.md` §3) |
 | 3 | Run-state persistence across browser refresh | ⬜ Not started |
 | 4 | Deployment gating, dry-run default | ⬜ Not started — lock proposal in Q-I awaiting approval |
 | 5 | Embedded: event handlers + validations on the parent BC | ⬜ Not started — **blocked on Q-F experiment** |
@@ -236,6 +241,54 @@ before this file goes anywhere. **Not yet redacted.**
 **Not yet done from this round:** none of the ~40 corrections have been applied to `PHASE0_AUDIT.md` or
 `PHASE0_SUMMARY.md`. They are recorded in `VERIFICATION_ROUND2.md` in ready-to-apply form (each written
 as "replace X with Y").
+
+### Phase 0 closed / Phase 1 opened (2026-08-10)
+
+**How Phase 0 closed.** The owner supplied the environment values (Q-H) and delegated the remaining
+open questions to my suggested answers, with the standing instruction to flag anything doubtful rather
+than proceed silently. Recorded per-decision in `SESSION_HANDOFF.md` §3, marked **owner** vs
+**delegated**, so a later session knows which are mine to revisit.
+
+**Context recovery.** This session began by reconstructing the project from an exported transcript after
+a usage limit ended the previous one. The B1/A8 verification verdicts had landed but were never
+reported; they were recovered from the task output file before it expired and written to
+`VERIFICATION_ROUND2.md`. The shared brief was diffed against the transcript copy — **identical**,
+241 non-blank lines each, zero hunks.
+
+**Housekeeping done.**
+- 🔒 `PHASE0_AUDIT.md:4297` Client ID **redacted** before any commit. Verified: zero occurrences remain
+  outside the source training deck, which is left byte-intact so its `C8:` line citations stay valid.
+- 📦 **`git init`** + `.gitignore` (modelled on AUX's), then an initial commit of the Phase 0
+  deliverables. `git check-ignore` confirms `backend/.env` is excluded.
+
+**Phase 1 — config layer built.** See `PHASE1_REGISTRY.md`.
+
+**Every endpoint was already recoverable — the owner did not need to supply any.** 15 read out of AUX's
+code, each cited to `file:line`; 5 from the confirmed JEF decompile. **20 total**, segregated by
+phase/case, each entry carrying its own `source` and `status`.
+
+| File | Committed | Holds |
+|---|---|---|
+| `config/endpoints.json` | ✅ | 20 endpoints, per phase/case, with provenance |
+| `config/environment.json` | ✅ | base URL, app URI, context root, known env health issues |
+| `backend/.env.example` | ✅ | template, key names only |
+| `backend/.env` | ❌ gitignored | real client ID; username/password/OpenAI key still blank |
+
+**One material correction to AUX's shape, and it is unvalidated.** AUX builds
+`{bare-host}/qad-central/api/qracore/{endpoint}` (`qad_client.py:57,:65`). The Adaptive base already
+carries its context root (`/clouderp`), so `clouderp` occupies the slot `qad-central` does — Adaptive
+resolves to `{base_url}/api/qracore/{endpoint}` with **no** extra prefix. That matches the brief's
+confirmed `{envUrl}api/qracore/…` form. **[INFERRED from a confirmed fact — no call has been made
+against `eeadaptive`.]** AUX hardcodes the prefix in three places; the registry makes it a setting.
+
+**Judgement call flagged for owner override:** `QAD_CLIENT_ID` went to `backend/.env` (gitignored)
+rather than committed config. The brief calls the plugin's `id` field "safe to commit", but AUX — the
+reference implementation — keeps it in `.env` (`core/config.py:94`), and working rule 7 says match the
+reference. One line to move if the owner prefers the JEF convention.
+
+**Not started, deliberately:** the settings **panel**. The brief requires the static-vs-dynamic
+classification to be confirmed by the owner *before* it is assumed, so building UI around an
+unconfirmed classification would be exactly the assumption rule 2 forbids.
 
 ---
 

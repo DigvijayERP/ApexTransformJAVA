@@ -1,0 +1,61 @@
+{
+  "_readme": [
+    "Environment identity — the DYNAMIC half of the registry. These are the values",
+    "that change when you point Adaptive at a different QAD environment. Endpoint",
+    "PATHS live in endpoints.json and do not belong here.",
+    "",
+    "COMMITTED — nothing in this file is a secret. Username, password and the",
+    "OpenAI key live in backend/.env, which is gitignored. See backend/.env.example.",
+    "",
+    "Provenance: base_url, app_uri and client_id were supplied directly by the",
+    "project owner on 2026-08-10. They were NOT derived, inferred, or invented."
+  ],
+
+  "active": "adaptive_dev",
+
+  "environments": {
+    "adaptive_dev": {
+      "label": "Adaptive (Java) development environment",
+      "base_url": "https://eeadaptive.yash.com:33005/clouderp",
+      "app_uri": "urn:app:com.yash.digwish",
+      "context_root": "",
+      "_context_root_note": [
+        "Empty because base_url already ends in the context root (/clouderp).",
+        "AUX's equivalent is 'qad-central', appended in code at",
+        "aux_web_version/backend/qad_client.py:57 to a bare host:port base.",
+        "Resolved URL shape: {base_url}/api/qracore/{endpoint}",
+        "                    {base_url}/oauth/token",
+        "This matches the confirmed JEF contract's {envUrl}api/qracore/... form.",
+        "UNVALIDATED against this host — no call has been made."
+      ],
+      "health": {
+        "known_issues": [
+          "HTTP 500 on entity-metadata generation and on sse/build-api-sources",
+          "Dependency jar will not download ('Downloading of core libs failed')",
+          "A test BC created here is stuck in Initial status",
+          "Network team has indicated the backing service is not responding"
+        ],
+        "consequence": "The Java deploy path cannot be validated live yet. Dry-run stays the default; do not report deploy as done on the basis of dry-run alone."
+      }
+    }
+  },
+
+  "secrets_live_in": "backend/.env",
+  "secret_keys": [
+    "QAD_CLIENT_ID",
+    "QAD_USERNAME",
+    "QAD_PASSWORD",
+    "OPENAI_API_KEY"
+  ],
+  "_client_id_placement_note": [
+    "QAD_CLIENT_ID is held in backend/.env rather than in this committed file.",
+    "This follows the REFERENCE IMPLEMENTATION (working rule 7): AUX puts",
+    "QAD_CLIENT_ID in backend/.env, which is gitignored",
+    "(aux_web_version/backend/core/config.py:94).",
+    "The QAD VS Code plugin convention differs — the build brief lists",
+    "config/qad-sse.config.json's `id` field as 'safe to commit'. Both positions",
+    "are defensible: an OAuth client_id is a public client identifier, not a",
+    "secret in the OAuth sense. Deferring to AUX's practice as the safer default.",
+    "Moving it here later is a one-line change — flagged for owner confirmation."
+  ]
+}
