@@ -57,7 +57,7 @@ Stage 6 skips itself when nothing was marked at stage 2.
 `core/config.py` · `core/stages.py` · `core/store.py` · `qad_client.py` ·
 `builders/{identity,naming,bc,form,view,deploy,event_handler,lookup}`.
 
-**138 offline assertions pass. Run both after any change — no network, no credentials:**
+**141 offline assertions pass. Run both after any change — no network, no credentials:**
 
 ```bash
 cd backend && python smoke_test.py && python store_test.py
@@ -69,7 +69,7 @@ cd backend && python smoke_test.py && python store_test.py
 
 ### Next — the run engine
 
-1. ~~Per-stage artifact store~~ ✅ **done** — `core/store.py`, 38 assertions.
+1. ~~Per-stage artifact store~~ ✅ **done** — `core/store.py`, 41 assertions.
 2. The seven stage functions, each reading/writing that store. Stage 4 also needs the LLM prompt
    ported with the `{{BROWSE_URI:field}}` convention replacing AUX's comment-it-out instruction.
 3. **Port the ABL parsers** — `progress_parser.py` (414 lines, parses ABL source) and
