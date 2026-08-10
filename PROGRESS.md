@@ -326,6 +326,53 @@ rule recorded in the plan §4. **Sub-question left explicitly untested rather th
 `viewMetadataV2`, `eventhandler`, `viewResourceMetadatas` and the deploy pair are idempotent. One live
 run settles it.
 
+### Case 1 backend foundation built (2026-08-10)
+
+**Owner supplied the remaining identity values** — `APP_NAME = digwish`,
+`DATASTORE_URI = urn:datastore:com.yash.extension`, `QAD_USERNAME`. Password and OpenAI key are the
+owner's to place in `backend/.env`. Owner also **agreed to the regeneration rule** (free before a write
+executes, blocked after).
+
+**Owner redefined the pipeline to five stages**, which is a real simplification of AUX's fourteen:
+
+| # | Stage | Gated | Writes on approval |
+|---|---|---|---|
+| 1 | Requirement gathering | ✅ | — |
+| 2 | Field mapping | ✅ | `bc.create` + dropdown wiring |
+| 3 | Form creation | ✅ | `form.save` |
+| 4 | View creation | ❌ **by owner's design** | `view.register` |
+| 5 | Deploy | ✅ | `deploy.check_warnings` + `deploy.business_entity` |
+
+Stage 4 carrying no gate is **sound, not an oversight**: `build_view_payload` is a pure function of the
+approved spec with no LLM call, so there is no authored content to review. It still writes, so what it
+registered is surfaced at the stage-5 gate.
+
+**Built and verified:**
+
+| File | What |
+|---|---|
+| `backend/core/config.py` | Registry-aware config. **Fixes confirmed trap #4** — `os.environ` now wins over the `.env` file, so Docker `env_file:` works (AUX's `dotenv_values()` reads the physical file only) |
+| `backend/core/stages.py` | The 5-stage manifest — **single source of stage identity**, served at `GET /api/run/stages`. Frontend keeps no table of its own |
+| `backend/qad_client.py` | Token cache, 401-refresh-and-retry, URL-encoded credentials, dry-run that reports method/url/headers/payload with the bearer masked |
+| `backend/builders/identity.py` | `AppIdentity` + every urn pattern, **defined once** instead of re-spelled in four builders |
+| `backend/builders/naming.py` | `sql_safe`, labels, formats, `validate_spec` — **one copy** instead of AUX's three |
+| `backend/builders/{bc,form,view,deploy}_builder.py` | Ported, payload shapes byte-identical to AUX, identity injected |
+| `backend/smoke_test.py` | **45 offline assertions, all passing.** No network, no credentials |
+
+**Improvements over AUX, each deliberate:**
+- Token is cached and refreshed on 401. AUX re-fetches before every write (7× per run) and aborts on a
+  mid-run 401 — which becomes the *normal* path once a run pauses at a human gate for hours.
+- `deployCheckForWarnings` is returned as a **separate payload** so its response can be shown at the
+  stage-5 gate. AUX fires it and discards the response (`pipeline.py:739`, never assigned).
+- `validate_spec()` runs on the spec the user approved — necessary now that the dialog can be edited by
+  hand, which is not a shape the LLM would have produced.
+- The form builder **refuses an incomplete layout** rather than saving a partial form.
+
+**Caught by the smoke test, worth carrying:** `status` is a SQL reserved word, so `sql_safe` renames it
+to `statusCode` for the physical column while the label stays "Status". A user who asks for `status`
+gets a differently-named QAD column. **The stage-2 dialog must show the safe name whenever it differs**,
+or the rename is silent.
+
 ---
 
 ## Deferrals — named, not silently dropped (working rule 6)

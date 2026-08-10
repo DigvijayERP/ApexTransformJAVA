@@ -1,0 +1,9 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+openai==1.55.3
+httpx==0.28.0
+aiosqlite==0.20.0
+python-dotenv==1.0.1
+pydantic==2.10.3
+slowapi==0.1.9
+PyJWT==2.8.0

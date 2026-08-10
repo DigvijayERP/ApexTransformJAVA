@@ -30,28 +30,43 @@ The authoritative brief is the "Adaptive Java version — build brief" the owner
 
 ## 2. ▶ EXACT NEXT ACTION
 
-**Owner has directed: build Case 1 (standalone BC creation) first, step-gated. Server-side/JEF comes
-later.** The full inventory is in **[PHASE2_CASE1_BUILD_PLAN.md](PHASE2_CASE1_BUILD_PLAN.md)** — read it
-before writing any code; it has the 16-gate table, the hardcoded-identity list, and the build order.
+**Building Case 1 (standalone BC creation), 5 stages, step-gated.** Server-side/JEF comes later.
+Background and the full inventory: **[PHASE2_CASE1_BUILD_PLAN.md](PHASE2_CASE1_BUILD_PLAN.md)**.
+Note that plan's 16-gate table is **superseded** — the owner has since defined a 5-stage shape, which
+`backend/core/stages.py` now implements and is authoritative.
 
-**Waiting on the owner for six inputs (§5 of that plan).** Build order item 1 can start as soon as
-`QAD_USERNAME`/`QAD_PASSWORD` land; items 2+ need `APP_NAME` and `DATASTORE_URI`.
+### Done — backend foundation, verified
 
-### Blocked on the owner (cannot proceed without)
+`core/config.py` · `core/stages.py` · `qad_client.py` · `builders/{identity,naming,bc,form,view,deploy}`
+· `smoke_test.py`. **45 offline assertions pass** (`cd backend && python smoke_test.py`) — no network,
+no credentials needed. Run it after any change to config, identity or the builders.
+
+### Next — the run engine
+
+1. Per-stage artifact store (SQLite, keyed `run_id` + `stage_id`) — nothing can be shown at a gate or
+   regenerated from without it.
+2. The five stage functions, each reading/writing that store.
+3. `POST /api/run/{id}/stage/{stage}` + approve / regenerate-with-input endpoints.
+4. Frontend `RunContext` (`useReducer`, no Zustand) + the stage dialog.
+
+**Dry-run is the default and stays so until the owner greenlights live writes.**
+
+### Blocked on the owner
 
 | # | Needed | Blocks |
 |---|---|---|
-| 1 | **`APP_NAME`** for `com.yash.digwish` — must match QAD's app list | Every BC + view payload |
-| 2 | **`DATASTORE_URI`** for the Adaptive environment | The final deploy call |
-| 3 | `QAD_USERNAME`, `QAD_PASSWORD` → `backend/.env` | Any live call |
-| 4 | `OPENAI_API_KEY` → `backend/.env` | Steps 1, 2, 5, 6, 8, 9, 10 |
-| 5 | 🔴 **Regeneration after a QAD write** — see plan §4 | The whole Phase 2 state machine |
-| 6 | Confirm the Phase 1 static/dynamic classification | Settings panel shape |
-| 7 | **Q-L** — did `probe_parent_eh.py` ever run, and what did it return? | Phase 5 design |
-| 8 | **Q-F** — permission + which environment for the grid-claiming experiment | Phase 5 design |
+| 1 | `QAD_PASSWORD` → `backend/.env` | Any live call. Everything else can be built and dry-run |
+| 2 | `OPENAI_API_KEY` → `backend/.env` | Stages 1, 2, 3 are LLM calls |
+| 3 | ❓ **Are event handlers dropped from Case 1?** AUX generates a TypeScript handler (its steps 8–11); the owner's 5-stage design has no such stage | Whether `event_handler_builder` gets ported |
+| 4 | Confirm the Phase 1 static/dynamic classification | Settings panel shape |
+| 5 | **Q-L** — did `probe_parent_eh.py` ever run, and what did it return? | Phase 5 design |
+| 6 | **Q-F** — permission + which environment for the grid-claiming experiment | Phase 5 design |
+
+**Settled by the owner:** identity values (`digwish`, `urn:datastore:com.yash.extension`); the
+regeneration rule (free before a write executes, blocked after); the 5-stage shape with stage 4 ungated.
 
 **Phase 1's settings panel is deferred behind Case 1**, at the owner's direction. The config layer it
-would edit already exists and is usable without a UI.
+would edit already exists and works without a UI.
 
 ---
 

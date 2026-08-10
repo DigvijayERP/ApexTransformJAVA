@@ -19,6 +19,31 @@
       "base_url": "https://eeadaptive.yash.com:33005/clouderp",
       "app_uri": "urn:app:com.yash.digwish",
       "context_root": "",
+
+      "_app_identity_note": [
+        "These four values replace the constants AUX hardcodes in five builder",
+        "files (bc_builder.py:4-6, form_builder.py:3-4, view_builder.py:4-6,",
+        "event_handler_builder.py:3, deploy_builder.py:3-4). EVERY urn in EVERY",
+        "payload derives from `module`:",
+        "  entity        urn:be:{module}.{BC}.I{BC}",
+        "  app/module    urn:app:{module}",
+        "  bdoc          urn:bd:{module}.{BC}.{BC}",
+        "  view metadata urn:view:viewmeta:{module}.{BC}",
+        "  hybrid browse urn:view:hybridbrowse:{module}.{bc_lower}",
+        "  browse source urn:browse:bebrowse:{module}.{bc_lower}",
+        "  field         urn:field:{module}.{BC}.I{BC}:{BC}.{field}",
+        "",
+        "`module` and `module_short` derive mechanically from app_uri.",
+        "`app_name` and `datastore_uri` were supplied by the owner 2026-08-10 —",
+        "neither is derivable, and app_name must match QAD's own app list."
+      ],
+      "app_identity": {
+        "module": "com.yash.digwish",
+        "module_short": "yash.digwish",
+        "app_name": "digwish",
+        "datastore_uri": "urn:datastore:com.yash.extension"
+      },
+
       "_context_root_note": [
         "Empty because base_url already ends in the context root (/clouderp).",
         "AUX's equivalent is 'qad-central', appended in code at",
