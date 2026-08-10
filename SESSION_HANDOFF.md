@@ -4,7 +4,7 @@
 sessions hit usage limits mid-task. This file exists so a **fresh session with zero context** can resume
 in minutes. Keep it current. If you change what you're doing, change this file in the same turn.
 
-**Last updated:** 2026-08-10 · **Phase 0 closed, Phase 1 in progress**
+**Last updated:** 2026-08-10 · **Phase 0 closed · Case 1 backend foundation built, run engine next**
 
 ---
 
@@ -30,22 +30,26 @@ The authoritative brief is the "Adaptive Java version — build brief" the owner
 
 ## 2. ▶ EXACT NEXT ACTION
 
-**Building Case 1 (standalone BC creation), 5 stages, step-gated.** Server-side/JEF comes later.
+**Building Case 1 (standalone BC creation), 6 stages, step-gated.** Server-side/JEF comes later.
 Background and the full inventory: **[PHASE2_CASE1_BUILD_PLAN.md](PHASE2_CASE1_BUILD_PLAN.md)**.
-Note that plan's 16-gate table is **superseded** — the owner has since defined a 5-stage shape, which
-`backend/core/stages.py` now implements and is authoritative.
+Note that plan's 16-gate table is **superseded** — the owner has since defined a 6-stage shape
+(requirements / fields / form / handler / view / deploy), which `backend/core/stages.py` now implements
+and is authoritative. Event handlers ARE in Case 1, after form creation, and the stage-4 dialog collects
+real Browse URIs rather than shipping the lookup commented out the way AUX does.
 
 ### Done — backend foundation, verified
 
-`core/config.py` · `core/stages.py` · `qad_client.py` · `builders/{identity,naming,bc,form,view,deploy}`
-· `smoke_test.py`. **45 offline assertions pass** (`cd backend && python smoke_test.py`) — no network,
-no credentials needed. Run it after any change to config, identity or the builders.
+`core/config.py` · `core/stages.py` · `qad_client.py` ·
+`builders/{identity,naming,bc,form,view,deploy,event_handler}` · `smoke_test.py`.
+**77 offline assertions pass** (`cd backend && python smoke_test.py`) — no network, no credentials
+needed. Run it after any change to config, identity or the builders.
 
 ### Next — the run engine
 
 1. Per-stage artifact store (SQLite, keyed `run_id` + `stage_id`) — nothing can be shown at a gate or
    regenerated from without it.
-2. The five stage functions, each reading/writing that store.
+2. The six stage functions, each reading/writing that store. Stage 4 also needs the LLM prompt ported
+   with the `{{BROWSE_URI:field}}` convention replacing AUX's comment-it-out instruction.
 3. `POST /api/run/{id}/stage/{stage}` + approve / regenerate-with-input endpoints.
 4. Frontend `RunContext` (`useReducer`, no Zustand) + the stage dialog.
 
@@ -57,13 +61,14 @@ no credentials needed. Run it after any change to config, identity or the builde
 |---|---|---|
 | 1 | `QAD_PASSWORD` → `backend/.env` | Any live call. Everything else can be built and dry-run |
 | 2 | `OPENAI_API_KEY` → `backend/.env` | Stages 1, 2, 3 are LLM calls |
-| 3 | ❓ **Are event handlers dropped from Case 1?** AUX generates a TypeScript handler (its steps 8–11); the owner's 5-stage design has no such stage | Whether `event_handler_builder` gets ported |
+| 3 | ❓ Should the Browse URI field be a **free-text box or a picker**? A picker needs a live probe of QAD's browse list, which needs credentials | Stage-4 dialog shape (free text works either way) |
 | 4 | Confirm the Phase 1 static/dynamic classification | Settings panel shape |
 | 5 | **Q-L** — did `probe_parent_eh.py` ever run, and what did it return? | Phase 5 design |
 | 6 | **Q-F** — permission + which environment for the grid-claiming experiment | Phase 5 design |
 
 **Settled by the owner:** identity values (`digwish`, `urn:datastore:com.yash.extension`); the
-regeneration rule (free before a write executes, blocked after); the 5-stage shape with stage 4 ungated.
+regeneration rule (free before a write executes, blocked after); the 6-stage shape with stage 5 (view)
+ungated; event handlers stay in Case 1 with user-supplied Browse URIs.
 
 **Phase 1's settings panel is deferred behind Case 1**, at the owner's direction. The config layer it
 would edit already exists and works without a UI.
@@ -80,10 +85,13 @@ changes; an owner decision is not.
 | Q-H | Environment values supplied (see §4) | **owner** |
 | — | Phase 0 closed; proceed to Phase 1 | **owner** |
 | Q-A | **No Zustand.** Run state = `useReducer`-based `RunContext` alongside `AuthProvider`. AUX has no Zustand — three runtime deps only, verified twice | delegated |
-| Q-D | **Sub-step ids** (`3a`, `13a`), preserving the existing 14-step numbering, rather than renumbering 14→16 | delegated |
+| Q-D | ~~Sub-step ids on AUX's 14-step numbering~~ — **superseded.** The owner replaced the whole shape with 6 stages, which dissolves the problem: `core/stages.py` is now the single source of stage identity and the frontend keeps no table | **owner** |
 | Q-F | Grid-claiming experiment deferred to live testing, and must run **two arms** (see §6) | delegated |
 | Q-B | Phase 2 transport = **per-step request/response**, modelled on SSS, not a paused SSE stream | delegated *(proposed, not yet exercised)* |
-| Q-C | Gate every step, but with a per-step `gated` flag; QAD-write steps gate **before** the write, showing the payload | delegated *(proposed)* |
+| Q-C | Gate every stage except view; QAD-write stages gate **before** the write, showing the payload | **owner** |
+| — | **6-stage shape**, view ungated, event handlers included after form creation | **owner** |
+| — | **Browse URIs collected from the user** at stage 4 instead of AUX's commented-out `api/TODO/provide-endpoint` | **owner** |
+| — | Regeneration free before a write executes, blocked after (QAD has no undo) | **owner** |
 | — | `git init` the repo; `.gitignore` before first commit | delegated |
 | — | `QAD_CLIENT_ID` in `backend/.env`, not committed config — matches AUX (rule 7). Flagged for owner override | delegated |
 
@@ -109,8 +117,15 @@ the brief — **not yet validated against a live call.**
 team is investigating. **Build anyway; dry-run stays the default; never report deploy as done on the
 strength of a dry-run.**
 
-Secrets live in `backend/.env` (gitignored). `QAD_CLIENT_ID` is set; username, password and the OpenAI
-key are still blank.
+```
+module        com.yash.digwish        (derived from app_uri)
+module_short  yash.digwish            (derived)
+app_name      digwish                 (owner-supplied; must match QAD's app list)
+datastore_uri urn:datastore:com.yash.extension   (owner-supplied; environment-specific)
+```
+
+Secrets live in `backend/.env` (gitignored). **Set:** `QAD_CLIENT_ID`, `QAD_USERNAME`.
+**Still blank:** `QAD_PASSWORD`, `OPENAI_API_KEY` — the owner is placing these.
 
 ---
 

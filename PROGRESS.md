@@ -333,15 +333,19 @@ run settles it.
 owner's to place in `backend/.env`. Owner also **agreed to the regeneration rule** (free before a write
 executes, blocked after).
 
-**Owner redefined the pipeline to five stages**, which is a real simplification of AUX's fourteen:
+**Owner redefined the pipeline to six stages**, a real simplification of AUX's fourteen:
 
 | # | Stage | Gated | Writes on approval |
 |---|---|---|---|
 | 1 | Requirement gathering | ✅ | — |
 | 2 | Field mapping | ✅ | `bc.create` + dropdown wiring |
 | 3 | Form creation | ✅ | `form.save` |
-| 4 | View creation | ❌ **by owner's design** | `view.register` |
-| 5 | Deploy | ✅ | `deploy.check_warnings` + `deploy.business_entity` |
+| 4 | Event handler | ✅ | `eventhandler.register` |
+| 5 | View creation | ❌ **by owner's design** | `view.register` |
+| 6 | Deploy | ✅ | `deploy.check_warnings` + `deploy.business_entity` |
+
+Stage 4 sits between form and view, matching AUX's own ordering (its steps 8–11 run after the form save
+at step 7 and before the view at 12–13).
 
 Stage 4 carrying no gate is **sound, not an oversight**: `build_view_payload` is a pure function of the
 approved spec with no LLM call, so there is no authored content to review. It still writes, so what it
@@ -372,6 +376,35 @@ registered is surfaced at the stage-5 gate.
 to `statusCode` for the physical column while the label stays "Status". A user who asks for `status`
 gets a differently-named QAD column. **The stage-2 dialog must show the safe name whenever it differs**,
 or the rename is silent.
+
+### Event handlers are IN Case 1 — and the Browse URI gap is closed (2026-08-10)
+
+**Owner confirmed** event handler generation stays in Case 1, positioned after form creation, with the
+user verifying the generated code. They also asked for something AUX never did: **prompt for the
+Browse URI** instead of shipping the lookup commented out.
+
+**The AUX behaviour, verified firsthand.** `agents/prompts.py:354-366` instructs the model to comment
+out every lookup and HTTP call behind a `TODO` pointing at a fake `api/TODO/provide-endpoint`, and
+`:378` forbids *"any uncommented HTTP call without a known working URL"*. Root cause: the generator has
+no way to know the real URI, so it defers to the user, who hand-edits in QAD afterwards. The generated
+handler ships inert.
+
+**How it works now.** The model emits a placeholder inside a string literal —
+`const uri: string = "{{BROWSE_URI:customerName}}";` — which is valid TypeScript and therefore survives
+the `tsc` gate. The stage-4 dialog lists every distinct placeholder with the line it appears on, the
+user supplies real URIs, and substitution is **textual and deterministic**: filling in a URI cannot
+change anything else in the code and costs no second LLM call. A placeholder the user skips is commented
+out — **exactly AUX's behaviour, so the fallback is never worse than today.** A handler still holding an
+unfilled placeholder cannot be POSTed; the builder refuses.
+
+**Also fixed while porting:** AUX hardcodes `eventHandlerType="BEFORE"` and `appliesTo="WEB"`
+(`event_handler_builder.py:30-31`). Both are validated parameters here — a typo would otherwise register
+a handler against a timing that never fires, which is close to undiagnosable from the UI. Phase 5's
+whole design depends on being able to choose the timing.
+
+**Bug caught by the smoke test, not by review:** commenting out a skipped line originally left the
+`{{BROWSE_URI:x}}` token inside the comment, so the pre-POST guard kept refusing a handler the user had
+deliberately chosen to skip. The comment now reads in plain words. **77 assertions pass.**
 
 ---
 

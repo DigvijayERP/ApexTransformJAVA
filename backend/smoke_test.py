@@ -20,6 +20,7 @@ import sys
 from core import config, stages
 from builders.identity import AppIdentity
 from builders import naming
+from builders import event_handler_builder as eh
 from builders.bc_builder import build_bc_payload, patch_dropdown_fields
 from builders.form_builder import build_form_payload
 from builders.view_builder import build_view_payload
@@ -185,16 +186,81 @@ def main() -> int:
     check("deploy entityURI", dep["deploy"]["entityURI"],
           "urn:be:com.yash.digwish.SmokeOrder.ISmokeOrder")
 
-    section("10. Stage manifest")
-    check("five stages", stages.total(), 5)
+    section("10. Event handler — Browse URI placeholders")
+    generated = "\n".join([
+        "export class SmokeOrderHandler {",
+        "  public onInit(): void {",
+        '    const custBrowse: string = "{{BROWSE_URI:customerName}}";',
+        '    this.ViewController.doHttpGet("{{BROWSE_URI:customerName}}");',
+        '    const stBrowse: string = "{{BROWSE_URI:statusCode}}";',
+        "  }",
+        "}",
+    ])
+    found = eh.extract_placeholders(generated)
+    check("two distinct placeholders", [p.field for p in found],
+          ["customerName", "statusCode"])
+    check("counts repeats", found[0].occurrences, 2)
+    check("carries context for the dialog",
+          "const custBrowse" in found[0].context, True)
+
+    resolved = eh.substitute_placeholders(generated, {
+        "customerName": "urn:browse:bebrowse:com.qad.erp.customers",
+        "statusCode": eh.SKIP,
+    })
+    check("supplied URI substituted",
+          "urn:browse:bebrowse:com.qad.erp.customers" in resolved["code"], True)
+    check("both occurrences substituted",
+          resolved["code"].count("urn:browse:bebrowse:com.qad.erp.customers"), 2)
+    check("skipped one is commented out, AUX-style",
+          "// TODO: supply the Browse URI for statusCode" in resolved["code"], True)
+    check("comment reads in plain words, no machine token left",
+          "<BROWSE URI FOR statusCode NOT SUPPLIED>" in resolved["code"], True)
+    check("filled reported", resolved["filled"], ["customerName"])
+    check("skipped reported", resolved["skipped"], ["statusCode"])
+    check("not fully resolved", resolved["fully_resolved"], False)
+    check("no placeholder survives", eh.extract_placeholders(resolved["code"]), [])
+
+    section("11. Event handler payload")
+    handler = eh.build_event_handler_payload(
+        "SmokeOrder", resolved["code"], "var x = 1;", timing="BEFORE", identity=ident)
+    row = handler["payload"]["eventHandlerV2s"][0]
+    check("appURI", row["appURI"], "urn:app:com.yash.digwish")
+    check("viewURI", row["viewURI"], "urn:view:viewmeta:com.yash.digwish.SmokeOrder")
+    check("timing", row["eventHandlerType"], "BEFORE")
+    check("appliesTo", row["appliesTo"], "WEB")
+    check("isActive", row["isActive"], True)
+
+    # AUX hardcodes BEFORE/WEB; these are parameters here, and validated.
+    after = eh.build_event_handler_payload("SmokeOrder", "var a;", "var a;",
+                                           timing="after", identity=ident)
+    check("timing accepts AFTER, normalised",
+          after["payload"]["eventHandlerV2s"][0]["eventHandlerType"], "AFTER")
+    try:
+        eh.build_event_handler_payload("SmokeOrder", "var a;", "var a;",
+                                       timing="SOMETIME", identity=ident)
+        check("bad timing rejected", False, True)
+    except ValueError as exc:
+        check("bad timing rejected", "must be one of" in str(exc), True)
+
+    try:
+        eh.build_event_handler_payload("SmokeOrder", generated, "var a;", identity=ident)
+        check("unfilled placeholder blocks the POST", False, True)
+    except ValueError as exc:
+        check("unfilled placeholder blocks the POST",
+              "unfilled Browse URI placeholders" in str(exc), True)
+
+    section("12. Stage manifest")
+    check("six stages", stages.total(), 6)
     check("stage order", [s.id for s in stages.STAGES],
-          ["requirements", "fields", "form", "view", "deploy"])
+          ["requirements", "fields", "form", "handler", "view", "deploy"])
+    check("handler sits between form and view", stages.next_after("form").id, "handler")
+    check("view follows handler", stages.next_after("handler").id, "view")
     check("view stage is ungated", stages.get("view").gated, False)
     check("every other stage is gated",
           all(s.gated for s in stages.STAGES if s.id != "view"), True)
     check("fields stage writes 3 endpoints", len(stages.get("fields").writes), 3)
     check("downstream of fields", [s.id for s in stages.stages_after("fields")],
-          ["form", "view", "deploy"])
+          ["form", "handler", "view", "deploy"])
     check("deploy is terminal", stages.next_after("deploy"), None)
     known = set(config.list_endpoints())
     referenced = {w for s in stages.STAGES for w in s.writes}

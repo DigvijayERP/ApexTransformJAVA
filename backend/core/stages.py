@@ -19,8 +19,12 @@ STAGE SHAPE (owner's design, 2026-08-10):
     1 Requirements   gated, no write
     2 Fields         gated -> approving POSTS the BC
     3 Form           gated -> approving POSTS the form
-    4 View                  -> POSTS the view, NO approval
-    5 Deploy         gated -> approving DEPLOYS
+    4 Handler        gated -> approving POSTS the event handler
+    5 View                  -> POSTS the view, NO approval
+    6 Deploy         gated -> approving DEPLOYS
+
+Stage 4 sits between form and view, matching AUX's ordering (its steps 8-11 run
+after the form save at step 7 and before the view at 12-13).
 
 The gate sits BEFORE each write, showing the exact payload. Approving is what
 fires the write. That is stricter than approving a receipt afterwards, and it
@@ -108,8 +112,25 @@ STAGES: List[Stage] = [
         locks_upstream=True,
     ),
     Stage(
-        id="view",
+        id="handler",
         number=4,
+        label="Event handler",
+        description=(
+            "Plan and write the client-extension TypeScript handler, syntax-check it "
+            "with the real tsc, and show it for verification. Any lookup or HTTP call "
+            "the handler needs appears as a Browse URI you fill in here, so the "
+            "handler ships working rather than commented out. Approving compiles it "
+            "and POSTs it to QAD."
+        ),
+        gated=True,
+        writes=["eventhandler.register"],
+        artifact_kind="handler_code",
+        editable=True,
+        locks_upstream=True,
+    ),
+    Stage(
+        id="view",
+        number=5,
         label="View creation",
         description=(
             "Build and register the browse/maintain/hybrid view. Deterministic — "
@@ -123,7 +144,7 @@ STAGES: List[Stage] = [
     ),
     Stage(
         id="deploy",
-        number=5,
+        number=6,
         label="Deploy",
         description=(
             "Show QAD's deployment warnings and the exact deploy payloads, then "
