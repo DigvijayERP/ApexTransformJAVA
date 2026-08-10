@@ -79,6 +79,17 @@ async def context(run_id: str, **db) -> Dict[str, Any]:
     return ctx
 
 
+def _docs_bundle(name: str) -> str:
+    """Grounding docs for a prompt.
+
+    The docs loader is not ported yet. Returning empty is correct meanwhile —
+    the prompt renders without a docs section rather than with a broken one —
+    but it does mean handler generation is currently UNGROUNDED, which is worth
+    knowing when judging the output at the stage-4 gate.
+    """
+    return ""
+
+
 def _need(ctx: Dict[str, Any], stage_id: str, what: str) -> Any:
     art = ctx.get(stage_id)
     if not art or what not in art:
@@ -96,16 +107,32 @@ async def stage_requirements(ctx: Dict[str, Any], instruction: str = "") -> Stag
     if instruction:
         user = f"{user}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
 
-    text = await llm.complete(prompts.REQUIREMENTS_GATHERING, user, role="planning")
+    text = await llm.complete(prompts.render(prompts.REQUIREMENTS_GATHERING),
+                              user, role="planning")
     if not text.strip():
         raise StageError("The model returned an empty requirements summary.")
 
-    # A .p/.cls parse would set this; with no source we ask the planner later.
     return StageResult(artifact={
         "text": text.strip(),
         "source": "llm",
-        "handler_hint": None,
+        # Drives whether stage 4 runs at all. None means undetermined, and the
+        # handler stage then proposes rather than skipping.
+        "handler_hint": _handler_hint(text),
     })
+
+
+def _handler_hint(requirements_text: str) -> Optional[bool]:
+    """Read the HANDLER_NEEDED line the requirements prompt asks for.
+
+    Returns True/False when the model answered, None when it did not. None is
+    NOT treated as False: silently skipping the handler stage because a model
+    forgot a line would lose real work without telling anyone.
+    """
+    import re as _re
+    m = _re.search(r"HANDLER_NEEDED\s*:\s*(yes|no)", requirements_text, _re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1).lower() == "yes"
 
 
 # ── Stage 2: fields ──────────────────────────────────────────────────────────
@@ -118,7 +145,8 @@ async def stage_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResul
         user = f"{requirements}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
 
     parsed = llm.parse_json(
-        await llm.complete(prompts.FIELD_CREATOR, user, role="generation", json_mode=True)
+        await llm.complete(prompts.render(prompts.FIELD_CREATOR), user,
+                          role="generation", json_mode=True)
     )
     spec = parsed.get("spec") if isinstance(parsed, dict) else None
     if not spec:
@@ -197,14 +225,15 @@ async def stage_form(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
     spec = _need(ctx, "fields", "spec")
     codes = [str(f["code"]) for f in spec["fields"]]
 
-    plan = await llm.complete(prompts.FORM_PLANNER, _json.dumps(spec["fields"]), role="planning")
+    plan = await llm.complete(prompts.render(prompts.FORM_PLANNER),
+                              _json.dumps(spec["fields"]), role="planning")
     user = plan
     if instruction:
         user = f"{plan}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
 
     placements = _placements_from(
-        llm.parse_json(await llm.complete(prompts.FORM_FIELD_BUILDER, user,
-                                          role="generation", json_mode=True))
+        llm.parse_json(await llm.complete(prompts.render(prompts.FORM_FIELD_BUILDER),
+                                          user, role="generation", json_mode=True))
     )
     missing = [c for c in codes
                if c.strip().lower() not in {str(p.get("fieldName", "")).strip().lower()
@@ -217,8 +246,8 @@ async def stage_form(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
             f"{', '.join(missing)}. Return ALL {len(codes)} fields: {', '.join(codes)}"
         )
         placements = _placements_from(
-            llm.parse_json(await llm.complete(prompts.FORM_FIELD_BUILDER, retry,
-                                              role="generation", json_mode=True))
+            llm.parse_json(await llm.complete(prompts.render(prompts.FORM_FIELD_BUILDER),
+                                              retry, role="generation", json_mode=True))
         )
 
     ident = AppIdentity.from_config()
@@ -311,8 +340,9 @@ async def stage_handler(ctx: Dict[str, Any], instruction: str = "",
         )
 
     bc = spec["bc_pascal"]
+    docs = _docs_bundle("client_extension_event_handler")
     plan = await llm.complete(
-        prompts.EVENT_HANDLER_PLANNER,
+        prompts.render(prompts.EVENT_HANDLER_PLANNER, docs_context=docs),
         f"BC Name: {bc}\nDescription: {spec.get('description','')}\n"
         f"Fields: {_json.dumps(spec['fields'])}",
         role="planning",
@@ -323,8 +353,9 @@ async def stage_handler(ctx: Dict[str, Any], instruction: str = "",
     if instruction:
         user += f"\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
 
-    ts_raw = ehb.strip_fences(await llm.complete(prompts.TS_CODE_WRITER, user,
-                                                 role="generation"))
+    ts_raw = ehb.strip_fences(await llm.complete(
+        prompts.render(prompts.TS_CODE_WRITER, docs_context=docs),
+        user, role="generation"))
     placeholders = ehb.extract_placeholders(ts_raw)
 
     resolved = ehb.substitute_placeholders(ts_raw, browse_uris or {})
@@ -345,7 +376,7 @@ async def stage_handler(ctx: Dict[str, Any], instruction: str = "",
     # them, exactly as AUX does by commenting the call out. They just cannot be
     # sent as-is, so the gate shows them and commit resolves them first.
     async def commit(dry_run: bool) -> List[Any]:
-        js = await llm.complete(prompts.TS_COMPILER,
+        js = await llm.complete(prompts.render(prompts.TS_COMPILER),
                                 f"Compile this TypeScript to ES5 JavaScript:\n\n{ts_code}",
                                 role="planning")
         built = ehb.build_event_handler_payload(bc, ts_code, js, timing="BEFORE",

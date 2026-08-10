@@ -57,7 +57,7 @@ Stage 6 skips itself when nothing was marked at stage 2.
 `core/config.py` · `core/stages.py` · `core/store.py` · `qad_client.py` ·
 `builders/{identity,naming,bc,form,view,deploy,event_handler,lookup}`.
 
-**201 offline assertions pass. Run all three after any change — no network, no credentials,
+**212 offline assertions pass. Run all three after any change — no network, no credentials,
 no API key:**
 
 ```bash
@@ -76,10 +76,12 @@ isolation; this one catches **chaining** bugs — and it found two on its first 
 
 1. ~~Per-stage artifact store~~ ✅ **done** — `core/store.py`, 41 assertions.
 2. ~~The seven stage functions~~ ✅ **done** — `core/engine.py`.
-3. ⚠️ **Port `agents/prompts.py`** — every prompt is a loud PLACEHOLDER. `assert_ported()` refuses
-   to drive a real model with one, so a live run fails early instead of generating plausible nonsense.
-   This is the last thing between here and a real dry run.
-4. The old item 2, each reading/writing that store. Stage 4 also needs the LLM prompt
+3. ~~Port `agents/prompts.py`~~ ✅ **done** — all eight ported as TEMPLATES. AUX hardcodes
+   `com.extensions.customapp` in FOUR places inside the TypeScript module the model is told to emit;
+   `render()` substitutes our identity, and a test guards that AUX's namespace never leaks.
+4. ⚠️ **Port the docs loader** — `_docs_bundle()` in engine.py returns empty, so handler generation
+   is currently UNGROUNDED. Note that AUX's loader reads `.txt` only while Adaptive's Docs are `.md`.
+5. The old item 2, each reading/writing that store. Stage 4 also needs the LLM prompt
    ported with the `{{BROWSE_URI:field}}` convention replacing AUX's comment-it-out instruction.
 3. **Port the ABL parsers** — `progress_parser.py` (414 lines, parses ABL source) and
    `lookup_detector.py` (585 lines). They feed four stages: requirements, the field spec, whether a

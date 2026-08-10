@@ -77,24 +77,30 @@ CALLS: list = []
 
 async def stub(system: str, user: str, role: str, json_mode: bool) -> str:
     """Answer by which placeholder prompt was sent."""
-    CALLS.append(system.split("\n")[1] if "\n" in system else system[:40])
-    if "REQUIREMENTS_GATHERING" in system:
+    # Dispatch on the OPENING LINE only. Matching anywhere in the body is
+    # ambiguous: FIELD_CREATOR describes its own input as coming "from the
+    # Requirements Gathering Agent", so a body search sends it the wrong reply.
+    opening = system.split("\n", 1)[0].strip()
+    CALLS.append(opening[:60])
+
+    if opening.startswith("You are a Requirements Gathering Agent"):
         steer = " Honouring: " + user.split("apply this:")[-1].strip() \
             if "apply this:" in user else ""
-        return "An order business component with a code, customer, date and status." + steer
-    if "FIELD_CREATOR" in system:
+        return ("An order business component with a code, customer, date and status."
+                + steer + "\nHANDLER_NEEDED: yes\nIt validates the order code.")
+    if opening.startswith("You are the Field Builder Agent"):
         return json.dumps({"spec": SPEC})
-    if "FORM_PLANNER" in system:
+    if opening.startswith("You are the Form Planner Agent"):
         return "Panel 1 Identity: orderCode, customerName. Panel 2 Details: orderDate, status."
-    if "FORM_FIELD_BUILDER" in system:
+    if opening.startswith("You are the Form Field Builder Agent"):
         return json.dumps(PLACEMENTS_REPLY)
-    if "EVENT_HANDLER_PLANNER" in system:
+    if opening.startswith("You are the Event Handler Planner"):
         return "1. Validate orderCode is present.\n2. Default status to OPEN."
-    if "TS_CODE_WRITER" in system:
+    if opening.startswith("You are a QAD TypeScript Event Handler developer"):
         return HANDLER_TS
-    if "TS_COMPILER" in system:
+    if opening.startswith("You are a TypeScript to JavaScript compiler"):
         return "var PipelineOrderHandler = (function () { return PipelineOrderHandler; }());"
-    raise AssertionError(f"stub got an unexpected prompt: {system[:80]}")
+    raise AssertionError(f"stub got an unexpected prompt: {opening[:80]}")
 
 
 async def main() -> int:
@@ -103,20 +109,35 @@ async def main() -> int:
     db = {"db_path": tmp}
     await store.init_db(tmp)
 
-    section("0. Placeholder prompts are refused for real calls")
+    section("0. Prompts render with OUR module, never AUX's")
     from agents import prompts
-    check("all eight prompts flagged unported", len(prompts.unported()), 8)
-    try:
-        prompts.assert_ported()
-        check("assert_ported raises", False, True)
-    except RuntimeError as exc:
-        check("assert_ported raises", "still placeholders" in str(exc), True)
+    ts = prompts.render(prompts.TS_CODE_WRITER)
+    # AUX hardcodes com.extensions.customapp in FOUR places INSIDE the TypeScript
+    # module the model is told to emit. Leaking it would generate handlers in
+    # AUX's namespace on our app - silently, and only visible inside QAD.
+    check("AUX's module never appears", "com.extensions.customapp" in ts, False)
+    check("nor its pascal form", "ComExtensionsCustomapp" in ts, False)
+    check("nor its underscore form", "com_extensions_customapp" in ts, False)
+    check("our module substituted", ts.count("com.yash.digwish") >= 3, True)
+    check("pascal form derived", "ComYashDigwish" in ts, True)
+    check("underscore form derived", "com_yash_digwish" in ts, True)
+    # {BCName} and {fieldName} are instructions to the MODEL, not values we fill.
+    check("model placeholders left alone", "{BCName}" in ts, True)
+    check("browse-uri convention taught", "BROWSE_URI:customerCode" in ts, True)
+    check("AUX's comment-it-out instruction is gone",
+          "api/TODO/provide-endpoint" in ts, False)
+    check("docs slot filled, not left dangling", "{QAD_DOCS_CONTEXT}" in ts, False)
+    check("requirements prompt asks for the handler signal",
+          "HANDLER_NEEDED" in prompts.render(prompts.REQUIREMENTS_GATHERING), True)
+    check("field prompt asks for lookup marking",
+          "needsLookup" in prompts.render(prompts.FIELD_CREATOR), True)
 
     section("1. Stage 1 — requirements")
     run_id = await store.create_run("I need an order tracking BC", dry_run=True, **db)
     out = await engine.run_stage(run_id, "requirements", **db)
     check("gated", out["gated"], True)
     check("produced text", "order business component" in out["artifact"]["text"], True)
+    check("handler signal parsed from the summary", out["artifact"]["handler_hint"], True)
     check("no writes declared", out["writes"], [])
 
     # Regenerating with a steer, before anything has been written.
@@ -299,7 +320,7 @@ async def main() -> int:
 
 
 async def _no_lookup_stub(system: str, user: str, role: str, json_mode: bool) -> str:
-    if "FIELD_CREATOR" in system:
+    if system.splitlines()[0].startswith("You are the Field Builder Agent"):
         plain = {k: v for k, v in SPEC.items()}
         plain["fields"] = [{k: v for k, v in f.items() if k != "needsLookup"}
                            for f in SPEC["fields"]]
