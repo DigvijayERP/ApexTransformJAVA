@@ -72,22 +72,33 @@ isolation; this one catches **chaining** bugs — and it found two on its first 
 **successful live** write has fired at that stage or any stage after it. Dry-run writes never lock
 (nothing left the process) and rejected writes never lock (QAD changed nothing).
 
-### Next — the run engine
+### Done
 
-1. ~~Per-stage artifact store~~ ✅ **done** — `core/store.py`, 41 assertions.
-2. ~~The seven stage functions~~ ✅ **done** — `core/engine.py`.
-3. ~~Port `agents/prompts.py`~~ ✅ **done** — all eight ported as TEMPLATES. AUX hardcodes
-   `com.extensions.customapp` in FOUR places inside the TypeScript module the model is told to emit;
-   `render()` substitutes our identity, and a test guards that AUX's namespace never leaks.
-4. ⚠️ **Port the docs loader** — `_docs_bundle()` in engine.py returns empty, so handler generation
-   is currently UNGROUNDED. Note that AUX's loader reads `.txt` only while Adaptive's Docs are `.md`.
-5. The old item 2, each reading/writing that store. Stage 4 also needs the LLM prompt
-   ported with the `{{BROWSE_URI:field}}` convention replacing AUX's comment-it-out instruction.
-3. **Port the ABL parsers** — `progress_parser.py` (414 lines, parses ABL source) and
-   `lookup_detector.py` (585 lines). They feed four stages: requirements, the field spec, whether a
-   handler is needed, and lookup candidates. Both are untracked in-flight work in AUX.
-4. `POST /api/run/{id}/stage/{stage}` + approve / regenerate-with-input endpoints.
-5. Frontend `RunContext` (`useReducer`, no Zustand) + the stage dialog.
+| ✅ | Piece | Where |
+|---|---|---|
+| ✅ | Config, QAD client, 6 payload builders, stage manifest | `core/config.py`, `qad_client.py`, `builders/` |
+| ✅ | Per-stage artifact store + regeneration lock | `core/store.py` |
+| ✅ | Run engine — 7 stage functions, run/approve/regenerate/skip | `core/engine.py` |
+| ✅ | All eight prompts, as **templates** | `agents/prompts.py` |
+
+Prompts are templates, not constants, for a specific reason: AUX hardcodes `com.extensions.customapp`
+in **four places inside the TypeScript module the model is told to emit** (`prompts.py:259,265,266,326`).
+Copying it verbatim would generate handlers in AUX's namespace on our app — silently, visible only
+inside QAD. `render()` substitutes our identity (including the `ComYashDigwish` and `com_yash_digwish`
+forms), and a test asserts AUX's namespace never appears in a rendered prompt.
+
+### Next
+
+1. ⚠️ **Port the docs loader.** `_docs_bundle()` in `engine.py` returns empty, so **handler generation
+   is currently UNGROUNDED**. Note AUX's loader reads `.txt` only, while Adaptive's `Docs/` are `.md` —
+   a straight port would silently find nothing.
+2. **Port the ABL parsers** — `progress_parser.py` (414 lines) and `lookup_detector.py` (585). They
+   feed four stages: requirements, the field spec, whether a handler is needed, and lookup candidates.
+   Both are untracked in-flight work in AUX. Until then, `handler_hint` comes from the model's
+   `HANDLER_NEEDED:` line rather than from the source.
+3. **The API layer** — `POST /api/run/{id}/stage/{stage}` plus approve / regenerate / skip.
+4. **The frontend** — `RunContext` (`useReducer`, no Zustand) and the stage dialog.
+5. **First live call**: `python verify_environment.py <entityURI>` — read-only, writes nothing.
 
 **Dry-run is the default and stays so until the owner greenlights live writes.**
 
