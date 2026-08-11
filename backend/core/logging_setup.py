@@ -52,6 +52,13 @@ def configure_logging(level: int = logging.INFO) -> None:
     root.addHandler(file_handler)
     root.addHandler(stream_handler)
 
+    # httpx logs every request URL at INFO — including the oauth/token call,
+    # whose QUERY STRING carries the username and password. Our own code never
+    # prints that URL; the library must not either. WARNING keeps real
+    # transport errors visible.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)

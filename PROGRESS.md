@@ -408,6 +408,31 @@ deliberately chosen to skip. The comment now reads in plain words. **77 assertio
 
 ---
 
+### First live contact with eeadaptive (2026-08-11)
+
+Owner placed credentials in `backend/.env`; `verify_environment.py` (read-only, auth only) ran twice.
+
+**✅ THE URL SHAPE IS NOW CONFIRMED, not inferred.** `{base}/oauth/token` with **no `/qad-central/`**
+reached a real OAuth endpoint that parsed our password grant — a wrong path would have 404'd, a wrong
+host would not have connected. The registry's biggest derived-but-unvalidated assumption is settled.
+The client_id was also accepted to the point of credential validation (an unknown client returns
+`invalid_client`, not `invalid_grant`).
+
+**❌ Blocked on credentials.** QAD's own body: `{"error":"invalid_grant","error_description":
+"Username or password is invalid, please try again."}` The account is the owner's colleague's; only
+they can verify it. **Deliberately did not retry** — the class-8 guide documents Security Control
+`Maximum Access Failures 10` (`C8:1000-1020`), and repeated failures lock the account. Two attempts
+spent. Next step is the owner confirming the same credentials log in to the eeadaptive **web UI**;
+if the UI accepts them and the API still refuses, the difference is ours to debug (encoding would be
+the first suspect).
+
+**Two fixes that came out of it, both kept:**
+1. 🔒 httpx logs every request URL at INFO — **including the oauth query string that carries the
+   password**, which our own code carefully never prints. `logging_setup` now caps httpx/httpcore at
+   WARNING. The leaked line existed only in the local console/app.log; rotated and gitignored.
+2. `_post_token` now surfaces QAD's OAuth error body (never the URL), which is what turned a mute
+   HTTP 400 into the exact diagnosis above.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

@@ -107,7 +107,15 @@ _tokens = _TokenCache()
 async def _post_token(url: str) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url)
-        resp.raise_for_status()
+        if resp.is_error:
+            # Surface QAD's own error body — an OAuth 400 carries
+            # {"error": "...", "error_description": "..."} which says WHY
+            # (bad credentials vs unsupported grant vs wrong client_id).
+            # Never include the URL: its query carries the credentials.
+            snippet = (resp.text or "")[:400]
+            raise RuntimeError(
+                f"QAD login failed (HTTP {resp.status_code}). Server said: {snippet}"
+            )
         return resp.json()
 
 
