@@ -12,13 +12,14 @@ generation for embedded grids. See `PLAN.md` for the phase plan and standing con
 > read-this-first file: current phase, exact next action, who decided what, and the traps.
 > This file is the full log behind it.
 
-**Where we are:** Phase 0 **closed by owner greenlight 2026-08-10**. Phase 1 **in progress** — the
-config layer is built and awaiting one confirmation. The repo is now under git (initialised
-2026-08-10, first commit `9fe95e2`).
+**Where we are (2026-08-11):** Case 1 is **built end to end and verified offline** — backend
+(274 assertions), 12-route API, and an APEX-styled chat-first frontend rendered live in the browser.
+First live contact with `eeadaptive` **confirmed the URL shape** (no `/qad-central/`) but QAD rejected
+the supplied credentials (`invalid_grant`), so live runs are blocked on the owner verifying them.
 
-**Next action:** owner confirms the static-vs-dynamic classification in
-[PHASE1_REGISTRY.md](PHASE1_REGISTRY.md); then build the Phase 1 settings **panel**. Also still
-needed from the owner: `QAD_USERNAME`, `QAD_PASSWORD`, `OPENAI_API_KEY` → `backend/.env`.
+**Next action:** owner confirms the QAD credentials log in to the eeadaptive **web UI**; then
+`python verify_environment.py` again (read-only). Meanwhile the whole pipeline runs in dry-run:
+backend `uvicorn main:app --port 8000`, frontend `npm run dev`, browse http://localhost:5173.
 
 **Read-order note:** `PHASE0_AUDIT.md` at 583 KB is not readable end to end and is not meant to be.
 `PHASE0_SUMMARY.md` carries one section per audit item, one line per pipeline step, every claim tagged
