@@ -160,23 +160,118 @@ function ViewConfig({ a }: { a: Bag }) {
   );
 }
 
-function LookupConfig({ a }: { a: Bag }) {
-  if (a.awaiting_configuration) {
-    const fields: Bag[] = a.fields ?? [];
-    return (
-      <Section title="Fields marked as needing a lookup">
+/** Browse entity = the last dotted segment of the browse URI.
+ *  urn:browse:bebrowse:com.extensions.training.training -> "training", which is
+ *  exactly the prefix the confirmed record's result field uses
+ *  ("training.className", class 4 p.13). Falls back to the post-colon segment
+ *  for mfg-style browses like urn:browse:mfg:ad057. */
+function entityOf(uri: string): string {
+  const s = uri.trim();
+  if (!s) return "";
+  const tail = s.includes(".") ? s.split(".").pop()! : s.split(":").pop()!;
+  return tail.trim();
+}
+
+function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => void }) {
+  const fields: Bag[] = a.fields ?? [];
+  // One entry per field: the browse it points at, the column it returns, and
+  // which other form fields it should fill in.
+  const [cfg, setCfg] = useState<Record<string, { uri: string; field: string; fills: string[] }>>(
+    () => Object.fromEntries(fields.map((f) => [f.code, { uri: "", field: "", fills: [] }])),
+  );
+
+  const set = (code: string, patch: Partial<{ uri: string; field: string; fills: string[] }>) =>
+    setCfg((c) => ({ ...c, [code]: { ...c[code], ...patch } }));
+
+  const ready = fields.every((f) => cfg[f.code]?.uri.trim() && cfg[f.code]?.field.trim());
+
+  const build = () => onConfigure?.(fields.map((f) => {
+    const c = cfg[f.code];
+    const entity = entityOf(c.uri);
+    const dotted = `${entity}.${c.field.trim()}`;
+    return {
+      field_code: f.code,
+      browse_uri: c.uri.trim(),
+      browse_label: entity.charAt(0).toUpperCase() + entity.slice(1),
+      browse_entity: entity,
+      result_field: dotted,
+      search_field: dotted,
+      additional_results: c.fills.map((target) => ({ field: dotted, target })),
+    };
+  }));
+
+  return (
+    <>
+      <Section title="Configure each lookup">
         <p className="muted">{a.hint}</p>
-        <ul className="plain">
-          {fields.map((f) => (
-            <li key={f.code}>
-              <code>{f.code}</code> — can auto-populate:{" "}
-              {(f.auto_populate_options ?? []).map((o: Bag) => o.label).join(", ") || "nothing else"}
-            </li>
-          ))}
-        </ul>
       </Section>
-    );
-  }
+
+      {fields.map((f) => {
+        const c = cfg[f.code];
+        const entity = entityOf(c.uri);
+        const opts: Bag[] = f.auto_populate_options ?? [];
+        return (
+          <Section key={f.code} title={f.label ?? f.code}>
+            <label className="field">
+              <span>Browse URI — which records to choose from</span>
+              <input
+                value={c.uri}
+                placeholder="urn:browse:bebrowse:com.yash.digwish.digsmoketest"
+                onChange={(e) => set(f.code, { uri: e.target.value })}
+              />
+            </label>
+
+            <label className="field">
+              <span>Field on that browse — the value returned</span>
+              <input
+                value={c.field}
+                placeholder="testCode"
+                onChange={(e) => set(f.code, { field: e.target.value })}
+              />
+            </label>
+
+            {entity && c.field.trim() && (
+              <p className="muted">
+                Result and search field → <code>{entity}.{c.field.trim()}</code>
+              </p>
+            )}
+
+            {opts.length > 0 && (
+              <>
+                <span className="fills-label">Also fill in when a value is picked</span>
+                <div className="fills">
+                  {opts.map((o) => (
+                    <label key={o.target} className="dry-pill">
+                      <input
+                        type="checkbox"
+                        checked={c.fills.includes(o.target)}
+                        onChange={(e) => set(f.code, {
+                          fills: e.target.checked
+                            ? [...c.fills, o.target]
+                            : c.fills.filter((t) => t !== o.target),
+                        })}
+                      />
+                      {o.label}
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </Section>
+        );
+      })}
+
+      {onConfigure && (
+        <button className="primary" disabled={!ready} onClick={build}>
+          Build lookup definition{fields.length === 1 ? "" : "s"}
+        </button>
+      )}
+    </>
+  );
+}
+
+function LookupConfig({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => void }) {
+  if (a.awaiting_configuration) return <LookupForm a={a} onConfigure={onConfigure} />;
   const lookups: Bag[] = a.lookups ?? [];
   return (
     <>
@@ -216,10 +311,11 @@ function DeployPreview({ a }: { a: Bag }) {
 }
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
-export function Artifact({ kind, artifact, onBrowseUris }: {
+export function Artifact({ kind, artifact, onBrowseUris, onConfigure }: {
   kind: ArtifactKind | undefined;
   artifact: Bag;
   onBrowseUris?: (v: Record<string, string>) => void;
+  onConfigure?: (c: Bag[]) => void;
 }) {
   switch (kind) {
     case "text":            return <Text a={artifact} />;
@@ -228,7 +324,7 @@ export function Artifact({ kind, artifact, onBrowseUris }: {
     case "form_layout":     return <FormLayout a={artifact} />;
     case "handler_code":    return <HandlerCode a={artifact} onBrowseUris={onBrowseUris} />;
     case "view_config":     return <ViewConfig a={artifact} />;
-    case "lookup_config":   return <LookupConfig a={artifact} />;
+    case "lookup_config":   return <LookupConfig a={artifact} onConfigure={onConfigure} />;
     case "deploy_preview":  return <DeployPreview a={artifact} />;
     default:
       // Never drop it. An unrenderable artifact is still a decision the user

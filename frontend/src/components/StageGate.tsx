@@ -55,6 +55,7 @@ export function StageGate() {
               kind={meta.artifact_kind}
               artifact={gate.artifact ?? {}}
               onBrowseUris={(browse_uris) => run(activeStage, { browse_uris })}
+              onConfigure={(configs) => run(activeStage, { configs })}
             />
           </div>
 

@@ -13,7 +13,7 @@ still be unreachable or wrongly-coded over HTTP.
 from __future__ import annotations
 
 import json
-import os
+
 import sys
 import tempfile
 from pathlib import Path
@@ -25,8 +25,16 @@ _store.DB_PATH = _TMP
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from core import llm  # noqa: E402
+from core import auth, llm  # noqa: E402
 from pipeline_test import stub  # noqa: E402  - reuse the same canned model
+
+# Drive the auth seam directly rather than through the environment. Reading
+# ADAPTIVE_API_TOKEN from os.environ or backend/.env made this test depend on
+# whatever the developer happened to have configured — it passed on a machine
+# with no token and failed the moment one was set, which is a property of the
+# machine, not of the code.
+_TEST_TOKEN = {"value": ""}
+auth.configured_token = lambda: _TEST_TOKEN["value"]
 
 FAILURES: list = []
 
@@ -45,7 +53,7 @@ def section(title: str) -> None:
 
 def main() -> int:
     llm.set_stub(stub)
-    os.environ.pop("ADAPTIVE_API_TOKEN", None)
+    _TEST_TOKEN["value"] = ""   # unauthenticated for sections 1-6
 
     from main import app
     with TestClient(app) as c:
@@ -163,7 +171,7 @@ def main() -> int:
               c.get(f"/api/run/{lid}/stage/requirements").json()["can_regenerate"], False)
 
         section("7. Auth, once a token is configured")
-        os.environ["ADAPTIVE_API_TOKEN"] = "s3cret-token"
+        _TEST_TOKEN["value"] = "s3cret-token"
         check("health now reports it enforced",
               c.get("/api/health").json()["auth_enforced"], True)
         check("creating a run without a token is 401",
@@ -178,7 +186,7 @@ def main() -> int:
                      headers={"Authorization": "Bearer s3cret-token"}).status_code, 201)
         check("reads stay open - they expose no secrets",
               c.get("/api/run/stages").status_code, 200)
-        os.environ.pop("ADAPTIVE_API_TOKEN", None)
+        _TEST_TOKEN["value"] = ""
 
     print()
     if FAILURES:
