@@ -86,9 +86,17 @@ cd D:\WEB_AUXdaptive_java_versionrontend && npm install && npm run dev
 
 Then open http://localhost:5173. Vite proxies `/api` to port 8000.
 
-⚠️ **The UI has NOT been verified in a browser yet.** It typechecks clean and builds clean
-(36 modules, 51 KB gzipped), and the API beneath it has 49 assertions over real HTTP — but nobody has
-watched it render. That is the first thing to do next session.
+✅ **Verified rendering in the browser** (2026-08-11): structure via read_page, computed styles via
+javascript_tool (Outfit gradient hero, aurora background, glassy composer), zero console errors.
+
+**The UI follows APEX Transform's design language** at the owner's direction — token values lifted
+verbatim from `aux_web_version/frontend/src/shared/design-tokens.css` (violet-dark palette, Inter body /
+Outfit display, aurora main card, glowing chat-first composer). Dark theme only; AUX's light block can
+be added under `[data-theme="light"]` later without touching components.
+
+**Credentials are now in `backend/.env`** (owner placed them 2026-08-11): QAD username/password and the
+OpenAI key. `.env` is gitignored — verified. The read-only environment check is now runnable:
+`cd backend && python verify_environment.py`.
 
 Three things a fresh session should understand before changing anything here:
 
