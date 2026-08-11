@@ -328,15 +328,14 @@ async def stage_handler(ctx: Dict[str, Any], instruction: str = "",
     spec = _need(ctx, "fields", "spec")
     placements = _need(ctx, "form", "placements")
 
-    # The .p tells us whether there is anything to port. With no source, the
-    # planner proposes and the user may still skip.
-    hint = (ctx.get("requirements") or {}).get("handler_hint")
-    if hint is False:
+    # Asks the same function the rail asks, so "will this stage run?" cannot be
+    # answered one way in the UI and another here.
+    if stages.applies("handler", ctx) is False:
         return StageResult(
             artifact={"needed": False},
             skip=True,
-            skip_reason=("The parsed source contains no validation or event logic, so there "
-                         "is nothing to port. An empty handler would only add noise in QAD."),
+            skip_reason=("The requirements show no validation or event logic to port, so there "
+                         "is nothing to write. An empty handler would only add noise in QAD."),
         )
 
     bc = spec["bc_pascal"]
@@ -419,7 +418,7 @@ async def stage_lookups(ctx: Dict[str, Any], instruction: str = "",
     ident = AppIdentity.from_config()
 
     wanted = [f for f in spec["fields"] if f.get("needsLookup") is True]
-    if not wanted and not configs:
+    if stages.applies("lookups", ctx) is False and not configs:
         return StageResult(
             artifact={"lookups": []},
             skip=True,

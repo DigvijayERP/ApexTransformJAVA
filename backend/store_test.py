@@ -122,6 +122,11 @@ async def main() -> int:
     check("attempt count surfaced", by_id["requirements"]["attempts"], 2)
     check("untouched stage is pending", by_id["deploy"]["status"], "pending")
     check("conditional flag carried", by_id["lookups"]["conditional"], True)
+    # "conditional" is a property of the STAGE; "applies" is a property of THIS
+    # RUN. Nothing upstream has produced a field spec here, so it is unknowable.
+    check("applies is unknown before the field spec exists",
+          by_id["lookups"]["applies"], None)
+    check("a non-conditional stage always applies", by_id["form"]["applies"], True)
     check("view marked as ungated", by_id["view"]["gated"], False)
     check("view still writes to QAD", by_id["view"]["writes_to_qad"], True)
 

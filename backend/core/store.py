@@ -294,6 +294,14 @@ async def run_stages(run_id: str, db_path: Optional[Path] = None) -> List[Dict[s
     for r in rows:
         latest[r["stage_id"]] = dict(r)
 
+    # What earlier stages produced, so a conditional stage can be reported as
+    # applying to this run or not — rather than as permanently "optional".
+    artifacts: Dict[str, Any] = {}
+    for needed in ("requirements", "fields"):
+        row = await get_stage(run_id, needed, db_path=db_path)
+        if row and row["artifact"]:
+            artifacts[needed] = row["artifact"]
+
     out = []
     for stage in stages.STAGES:
         seen = latest.get(stage.id)
@@ -303,6 +311,7 @@ async def run_stages(run_id: str, db_path: Optional[Path] = None) -> List[Dict[s
             "label": stage.label,
             "gated": stage.gated,
             "conditional": bool(stage.conditional_on),
+            "applies": stages.applies(stage.id, artifacts),
             "writes_to_qad": bool(stage.writes),
             "status": seen["status"] if seen else "pending",
             "attempts": seen["attempt"] if seen else 0,

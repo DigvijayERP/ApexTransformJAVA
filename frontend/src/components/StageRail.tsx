@@ -41,7 +41,15 @@ export function StageRail() {
             <span className="mark" aria-hidden>{mark(s)}</span>
             <span className="rail-label">
               {s.label}
-              {s.conditional && <em className="tag">optional</em>}
+              {/* Only tag a conditional stage while it is genuinely undecided.
+                  Once its condition is MET the stage is required for this run,
+                  and calling it "optional" invites skipping necessary work. */}
+              {s.conditional && s.applies === null && (
+                <em className="tag" title="runs only if this component needs it">if needed</em>
+              )}
+              {s.conditional && s.applies === false && s.status === "pending" && (
+                <em className="tag" title="not needed for this component">not needed</em>
+              )}
               {s.writes_to_qad && <em className="tag write" title="writes to QAD">writes</em>}
             </span>
             {s.attempts > 1 && <span className="attempts">×{s.attempts}</span>}

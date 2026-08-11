@@ -253,6 +253,46 @@ def stages_after(stage_id: str) -> List[Stage]:
     return STAGES[ids.index(stage_id) + 1:]
 
 
+def applies(stage_id: str, artifacts: Dict[str, Any]) -> Optional[bool]:
+    """Does this stage apply to THIS run, given what earlier stages produced?
+
+        True   it will run — for a conditional stage, its condition is met
+        False  it will skip itself
+        None   not yet knowable; the stage it depends on has not run
+
+    THE SINGLE PLACE THIS IS DECIDED. The engine asks it before running a
+    conditional stage and the API reports it to the UI, so "will this stage
+    run?" cannot be answered one way by the rail and another by the engine.
+    That divergence is the exact defect this project keeps designing against.
+
+    It also lets the UI stop calling a stage "optional" once its condition is
+    met: a lookup stage with a marked field is REQUIRED for that run, and
+    labelling it optional invites the user to skip work they actually need.
+    """
+    stage = get(stage_id)
+    if not stage.conditional_on:
+        return True
+
+    if stage.conditional_on == "handler_needed":
+        req = artifacts.get("requirements")
+        if req is None:
+            return None
+        # An absent signal is NOT a no: the planner proposes and the user
+        # decides. Only an explicit False skips.
+        return req.get("handler_hint") is not False
+
+    if stage.conditional_on == "any_field_needs_lookup":
+        spec = (artifacts.get("fields") or {}).get("spec")
+        # No spec means the field stage has not produced one — not that no field
+        # wants a lookup. Answering False here would tell the UI "not needed" on
+        # no evidence at all.
+        if not spec:
+            return None
+        return any(f.get("needsLookup") is True for f in spec.get("fields") or [])
+
+    return None
+
+
 def total() -> int:
     """Derived, never hardcoded. AUX hardcodes its total in three places."""
     return len(STAGES)

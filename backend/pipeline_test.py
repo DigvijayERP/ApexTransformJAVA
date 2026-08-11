@@ -177,6 +177,15 @@ async def main() -> int:
     allowed, _ = await store.can_regenerate(run_id, "requirements", **db)
     check("upstream still regenerable", allowed, True)
 
+    section("3b. A conditional stage stops being 'optional' once its condition is met")
+    by_id = {s["id"]: s for s in await store.run_stages(run_id, **db)}
+    # SPEC marks customerName needsLookup, so the lookup stage is REQUIRED for
+    # this run — the UI must not offer it as optional.
+    check("lookups apply to this run", by_id["lookups"]["applies"], True)
+    check("handler applies (requirements said yes)", by_id["handler"]["applies"], True)
+    check("still flagged conditional as a stage property",
+          by_id["lookups"]["conditional"], True)
+
     section("4. Stage 3 — form reads the spec stage 2 stored")
     out = await engine.run_stage(run_id, "form", **db)
     art = out["artifact"]

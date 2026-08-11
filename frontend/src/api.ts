@@ -69,6 +69,9 @@ export interface StageStatus {
   label: string;
   gated: boolean;
   conditional: boolean;
+  /** Does this stage apply to THIS run? true = it will run, false = it will
+   *  skip itself, null = not yet knowable. */
+  applies: boolean | null;
   writes_to_qad: boolean;
   status: "pending" | "running" | "awaiting_approval" | "approved" | "skipped" | "failed";
   attempts: number;
