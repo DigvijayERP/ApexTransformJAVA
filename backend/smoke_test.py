@@ -284,23 +284,25 @@ def main() -> int:
     # QAD's own Lookup entity declares exactly eight PascalCase fields. A live
     # POST rejected the camelCase payload ported from AUX, which also carried
     # five keys the entity does not have.
-    check("keys are PascalCase, as QAD declares them", sorted(row),
-          ["BrowseURI", "FieldSet", "ModuleURI", "Reference", "ResultField",
-           "SearchField", "TargetFieldSet"])
-    check("field set reuses the BC's own field URI", row["FieldSet"], uris["customerName"])
-    check("and is sent under the validator's name too",
-          row["TargetFieldSet"], uris["customerName"])
-    check("browse uri", row["BrowseURI"], target.uri)
-    check("module uri", row["ModuleURI"], "urn:app:com.yash.digwish")
-    check("reference empty, per the confirmed record", row["Reference"], "")
-    # The keys AUX invented must never come back.
-    check("no invented keys",
-          [k for k in ("appName", "browseName", "fieldLabel", "namespace",
-                       "searchFieldOperator", "lookupQualifiers",
-                       "lookupResultFields", "lookupSearchConditions") if k in row], [])
-    check("auto-populate is reported but not sent under a guessed name",
-          built["summary"]["auto_populates_requested"], ["SmokeOrder_quantityAutoField2"])
-    check("and that gap is surfaced", len(built["unverified"]), 3)
+    # Shape captured off the wire from QAD's own Lookup Definition Save.
+    check("keys are camelCase, as the captured Save shows", sorted(row),
+          ["appName", "browseURI", "concurrencyHash", "customData", "dataOperation",
+           "disallowedActions", "disallowedActionsMessage", "fieldLabel", "fieldSet",
+           "lookupQualifiers", "lookupResultFields", "lookupSearchConditions",
+           "moduleURI", "namespace", "reference", "resultField", "searchField",
+           "searchFieldOperator"])
+    check("field set reuses the BC's own field URI", row["fieldSet"], uris["customerName"])
+    check("browse uri", row["browseURI"], target.uri)
+    check("module uri", row["moduleURI"], "urn:app:com.yash.digwish")
+    # namespace is the module's FIRST TWO SEGMENTS - com.yash, not com.yash.digwish.
+    check("namespace is the first two module segments", row["namespace"], "com.yash")
+    check("concurrencyHash null on create", row["concurrencyHash"], None)
+    check("reference empty, per the confirmed record", row["reference"], "")
+    check("auto-populate now has a home on the payload",
+          row["lookupResultFields"], [{"field": "training.location",
+                                       "target": "SmokeOrder_quantityAutoField2"}])
+    check("its element shape is flagged as screenshot-derived",
+          len(built["unverified"]), 1)
 
     section("13. Lookup — refuses to send an incomplete config")
     blank = lk.BrowseTarget(uri="", label="X", entity="x", result_field="", search_field="")

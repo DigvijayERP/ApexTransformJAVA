@@ -149,12 +149,12 @@ class LookupSpec:
 # The wire value is unverified; see the module docstring. Kept as a named
 # constant so there is exactly one place to change once a live POST settles it.
 DEFAULT_SEARCH_OPERATOR = "eq"
-UNVERIFIED = [
-    "searchFieldOperator: the UI displays a phrase ('equals', 'greater or equal to'); "
-    "the wire value is unverified. Sending 'eq' as AUX does.",
-    "uri / modelId / concurrencyHash: omitted on create, unconfirmed. Validate against a "
-    "real server response before enabling live POSTs.",
-]
+# SETTLED by the captured Save, 2026-08-11:
+#   searchFieldOperator IS a short code on the wire - the UI's "greater or equal
+#     to" was sent as "ge". So "eq" for equals is right.
+#   concurrencyHash is null on create (present, not omitted).
+#   modelId does not exist at all.
+UNVERIFIED: list = []
 
 
 def build_lookup_payload(
@@ -192,10 +192,13 @@ def build_lookup_payload(
     if source_field and source_field.get("label"):
         field_label = source_field["label"]
 
+    # Condition shape taken verbatim from the captured Save. Note it carries
+    # NEITHER fieldValue2/fieldValue2Type NOR dataType, which the ported guess
+    # had, and it DOES carry __gridLockedDummyColumn - a UI grid artefact that
+    # nonetheless goes over the wire, so it is reproduced rather than tidied away.
     conditions = []
     for cond in lookup.search_conditions:
         name = str(cond.get("field_name", ""))
-        # A real record uses the dotted browse path, never a bare column (C4:201).
         if "." not in name and lookup.browse.entity:
             name = f"{lookup.browse.entity}.{name}"
         conditions.append({
@@ -203,9 +206,7 @@ def build_lookup_payload(
             "operator": str(cond.get("operator", "CONTAINS")).upper(),
             "fieldValue1": cond.get("value", ""),
             "fieldValue1Type": "LITERAL",
-            "fieldValue2": None,
-            "fieldValue2Type": None,
-            "dataType": cond.get("data_type", "character"),
+            "__gridLockedDummyColumn": "",
         })
 
     result_fields = [
@@ -213,52 +214,66 @@ def build_lookup_payload(
         for r in lookup.additional_results
     ]
 
-    # FIELD NAMES COME FROM QAD ITSELF, not from the UI labels.
+    # SHAPE CAPTURED FROM QAD'S OWN LOOKUP DEFINITION SCREEN, 2026-08-11.
     #
-    # A live POST on 2026-08-11 was rejected with "Field is mandatory.
-    # (ResultField); Field is mandatory. (TargetFieldSet)". Asking QAD to
-    # describe its own Lookup entity -
-    #   GET entitymetadatas?entityURI=urn:be:com.qad.qra.lookup.ILookup
-    # - returns exactly eight fields, all PascalCase:
+    # A real Save was recorded off the wire. It settles what two rounds of
+    # inference could not, and corrects a wrong turn of mine:
     #
-    #   BrowseURI  REQUIRED   FieldSet   REQUIRED   ModuleURI  REQUIRED
-    #   ResultField           SearchField           Reference
-    #   ConcurrencyHash       DataOperation
+    #   * The endpoint is V1 - lookups?viewUri=urn:be:com.qad.qra.lookup.ILookup.
+    #     Not the LookupV2 entity the picker's relatedResourceUri mentions.
+    #   * THE KEYS ARE camelCase. I had switched them to PascalCase after
+    #     reading the entity's field codes off entitymetadatas. Entity field
+    #     CODES and wire JSON KEYS are different things; AUX's camelCase was
+    #     right all along.
+    #   * `lookupResultFields`, `lookupSearchConditions` and `lookupQualifiers`
+    #     ARE real members, even though the entity metadata does not list them.
+    #     So auto-populate does have a home after all.
+    #   * `namespace` is the module's FIRST TWO SEGMENTS ("com.yash"), not the
+    #     whole module - a detail no rule would have produced.
     #
-    # The payload ported from AUX used camelCase AND five keys that do not
-    # exist on the entity at all - appName, browseName, fieldLabel, namespace,
-    # searchFieldOperator - plus three array members. AUX never POSTed a
-    # lookup, so none of that was ever contradicted.
-    lookup_obj = {
-        "BrowseURI": lookup.browse.uri,
-        "ModuleURI": ident.module_uri,
-        "ResultField": lookup.browse.result_field,
-        "SearchField": lookup.browse.search_field,
-        "Reference": "",                       # confirmed empty, C4:195
-        # TWO SURFACES OF QAD DISAGREE ON THIS ONE NAME. The entity calls it
-        # FieldSet; the validator that rejected us called it TargetFieldSet.
-        # Both are sent with the same value: an unrecognised key is ignored,
-        # a missing mandatory one is not. Which one QAD actually consumes is
-        # still unknown - see PROGRESS.md.
-        "FieldSet": field_uri,
-        "TargetFieldSet": field_uri,
-    }
-    # Deliberately NOT sent: ConcurrencyHash and DataOperation (optimistic-lock
-    # and operation markers that belong to an update, not a create), and every
-    # key AUX invented. Auto-populate and search conditions have no home on
-    # this entity - see below.
+    # The earlier "Field is mandatory (ResultField)/(TargetFieldSet)" therefore
+    # did not mean the keys were wrong. It meant the VALUES did not resolve:
+    # resultField was 'digsmoketest.testCode' where QAD holds
+    # 'digSmokeTest.testCode'. QAD reports an unresolvable value as missing.
+    parts = ident.module.split(".")
+    namespace = ".".join(parts[:2]) if len(parts) >= 2 else ident.module
 
-    unverified = list(UNVERIFIED)
-    if result_fields or conditions:
-        # Carried in the summary so the gate can show what was asked for, but
-        # NOT in the payload: QAD's Lookup entity has no field for either, so
-        # sending them under a guessed name would be exactly the mistake that
-        # produced the invented keys above.
+    lookup_obj = {
+        "customData": None,
+        "lookupQualifiers": [],
+        "lookupResultFields": result_fields,
+        "lookupSearchConditions": conditions,
+        "searchFieldOperator": lookup.operator or DEFAULT_SEARCH_OPERATOR,
+        "fieldSet": field_uri,
+        "reference": "",                       # confirmed empty, C4:195
+        "disallowedActions": "",
+        "disallowedActionsMessage": "",
+        "moduleURI": ident.module_uri,
+        "concurrencyHash": None,               # null on create; set on update
+        "dataOperation": "",
+        "browseURI": lookup.browse.uri,
+        "searchField": lookup.browse.search_field,
+        "resultField": lookup.browse.result_field,
+        "namespace": namespace,
+        "appName": ident.app_name,
+        "fieldLabel": field_label,
+    }
+    # NOT sent, deliberately:
+    #   uri - the capture carried a malformed one
+    #     ("urn:be:com.qad.qra.berelation.IBERelation:urn:app:com%2Eyash..."),
+    #     which reads as leftover UI state rather than a value QAD needs.
+    #   searchVariablesDataLists - a large static list of date/user tokens the
+    #     UI ships for its own dropdowns. Not data about this lookup.
+
+    unverified = []
+    if result_fields:
+        # The captured Save carried lookupResultFields as an empty array, so the
+        # member is confirmed but the ELEMENT shape is not. {field, target} comes
+        # from class 4 p.13's screenshot, not from the wire.
         unverified.append(
-            "Auto-populate targets and search conditions are NOT in the payload. QAD's Lookup "
-            "entity declares no field for them, so where they belong is unknown - most likely a "
-            "child collection reached by its own endpoint. Configure them in QAD's Lookup "
-            "Definition screen for now, or capture that screen's save request to settle it."
+            "lookupResultFields is confirmed present, but its element shape {field, target} comes "
+            "from a screenshot (class 4 p.13), not from a captured wire value - the captured Save "
+            "had none configured."
         )
 
     return {

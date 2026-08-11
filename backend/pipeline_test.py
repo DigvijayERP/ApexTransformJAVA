@@ -251,11 +251,12 @@ async def main() -> int:
     check("one lookup built", len(art["lookups"]), 1)
     check("fieldSet is the URI stage 2 created", art["lookups"][0]["field_uri"],
           "urn:field:com.yash.digwish.PipelineOrder.IPipelineOrder:PipelineOrder.customerName")
-    # Three now: the two long-standing unknowns plus the auto-populate gap that
-    # the live rejection exposed - QAD's Lookup entity has no field for it.
-    check("unverified items surfaced, not hidden", len(out["warnings"]), 3)
-    check("the auto-populate gap is named",
-          any("Auto-populate" in w for w in out["warnings"]), True)
+    # Down to one: the captured Save settled searchFieldOperator ("ge" for
+    # "greater or equal to", so short codes) and concurrencyHash (null on
+    # create). Only lookupResultFields' ELEMENT shape is still screenshot-derived.
+    check("one unverified item remains", len(out["warnings"]), 1)
+    check("and it names the element shape",
+          any("element shape" in w for w in out["warnings"]), True)
     await engine.approve_stage(run_id, "lookups", **db)
 
     section("8. Stage 7 — deploy, terminal")

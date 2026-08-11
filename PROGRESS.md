@@ -591,6 +591,44 @@ from AUX. V2 has four fields V1 lacks. Whether the write should target V2 is **s
 POST body would settle it, along with the `FieldSet` vs `TargetFieldSet` ambiguity and where
 auto-populate targets live.
 
+### 🔴 The Save capture landed — and corrected a wrong turn of mine (2026-08-11)
+
+Owner captured a real Lookup Definition **Save** off the wire. It settles everything, and reverses a
+change I made two rounds earlier.
+
+**The endpoint is V1** — `lookups?viewUri=urn:be:com.qad.qra.lookup.ILookup`. Ours was right; the
+LookupV2 entity the picker's `relatedResourceUri` mentions is not what the screen posts to.
+
+**🔴 THE KEYS ARE camelCase. I was wrong.** After reading `entitymetadatas` I rewrote the payload in
+PascalCase because QAD reported its field CODES that way. **Entity field codes and wire JSON keys are
+different things**, and AUX's camelCase was right all along. Reverted. The lesson is narrow and worth
+keeping: *asking an entity to describe itself tells you about the entity, not about the wire.*
+
+**What the earlier "Field is mandatory" really meant.** Not that the keys were wrong — that the
+VALUES did not resolve. `resultField` was `digsmoketest.testCode` where QAD holds
+`digSmokeTest.testCode`. **QAD reports an unresolvable value as a missing one**, which is why two
+rounds of key-renaming chased the wrong thing.
+
+**Now settled by the wire, not by inference:**
+
+| | |
+|---|---|
+| `searchFieldOperator` | short codes — the UI's "greater or equal to" went out as **`ge`**. So `eq` is right |
+| `concurrencyHash` | **present and null** on create, not omitted |
+| `modelId` | does not exist at all |
+| `lookupResultFields` / `lookupSearchConditions` / `lookupQualifiers` | **real members**, though the entity metadata lists none of them. Auto-populate does have a home — restored |
+| `namespace` | the module's **first two segments** (`com.yash`), not the whole module. No rule would have produced that |
+| condition shape | `{fieldName, operator, fieldValue1, fieldValue1Type, __gridLockedDummyColumn}` — no `fieldValue2` or `dataType`, and it really does ship a UI grid artefact |
+
+**Two things in the capture deliberately NOT copied:** a malformed `uri`
+(`urn:be:...IBERelation:urn:app:com%2Eyash...`) that reads as leftover UI state, and
+`searchVariablesDataLists`, a large static list of date/user tokens the UI ships for its own dropdowns
+rather than data about the lookup.
+
+**One unknown left, honestly narrow:** `lookupResultFields` is confirmed present but was EMPTY in the
+capture, so its element shape `{field, target}` still comes from class 4 p.13's screenshot rather than
+the wire.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |
