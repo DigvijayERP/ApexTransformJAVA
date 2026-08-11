@@ -534,6 +534,26 @@ Two of the three long-standing lookup unknowns are therefore closed by evidence:
 `searchFieldOperator` does not exist at all, and `uri`/`modelId` were correctly omitted (the entity has
 neither; it has `ConcurrencyHash`, which belongs to an update).
 
+### Lookup blocked on a capture — reading has been exhausted (2026-08-11)
+
+Second live lookup POST got past the field names and failed with **`Invalid URI`** (no field named).
+Three URIs are sent; `ModuleURI` is proven good by every other call, so it is `BrowseURI` or the
+field set.
+
+**Read QAD to find out, and hit a wall worth recording:** `GET entitymetadatas` returns
+**`fieldURI: ''` for every field of every component** — checked on the DEPLOYED `DigSmokeTest` and the
+undeployed `DigLookupTest2`, so it is not a deployment-state effect. QAD accepts the `fieldURI` we send
+at create time and does not give it back. **Our field-set URI is therefore unverifiable by construction**,
+and class 4 (pp. 6–8) shows the real flow is to *pick* the field from a Fields dialog filtering on
+"Field URI contains …" — a source we have not located. `viewResourceMetadatas` GET returned zero rows.
+
+**This is the point to stop deriving and capture.** Escalated to the top of
+`API_CAPTURES_NEEDED.md`: the Fields picker request, then the Save POST body. One is blocking, the
+other closes the last two unknowns at the same time.
+
+**Nothing else is blocked.** Everything before Lookups works live, and the failed write did not lock —
+the run can resume at that stage the moment the payload is right.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

@@ -1,5 +1,33 @@
 # API captures needed — what to grab, and when
 
+> ## 🔴 ONE CAPTURE IS NOW BLOCKING (2026-08-11)
+>
+> Everything else in Case 1 works live. **Only the Lookup Definition is blocked**, and reading has
+> taken it as far as reading can go:
+>
+> 1. Live POST → `Field is mandatory. (ResultField); (TargetFieldSet)`. **Solved by reading** — asked
+>    QAD to describe its own Lookup entity, learned the eight PascalCase field names.
+> 2. Live POST → **`Invalid URI`**. Not solvable by reading: `GET entitymetadatas` returns
+>    **`fieldURI: ''` for every field**, on deployed and undeployed components alike. So the field URI
+>    we construct has nothing to verify against, and QAD rejects it.
+>
+> Class 4 (pages 6–8) shows why: the user **picks** the field from a *Fields* dialog that filters on
+> "Field URI contains …". QAD has a field-URI source we have not located, and it is not in any endpoint
+> we know. Probing `viewResourceMetadatas` returned nothing.
+>
+> **What to capture — Lookup Definition → New → the field picker:**
+>
+> | | |
+> |---|---|
+> | 1 | Main Menu → **Lookup Definition** → **New** |
+> | 2 | Click the search icon on **Field URI**. F12 → Network **before** clicking |
+> | 3 | Send the **request URL** the dialog fires, and one row of its **response** |
+> | 4 | Then pick a field, fill the rest, **Save** — and send that **POST body** |
+>
+> Step 3 gives the field-URI format and where it comes from. Step 4 settles the remaining
+> `FieldSet` vs `TargetFieldSet` ambiguity and shows where auto-populate targets live. Strip the
+> `Authorization` header from both.
+
 **None of this blocks the build.** Stages 2–5 and the whole dry-run flow can be finished without a
 single capture. Each item below either settles something currently guessed at, or upgrades a free-text
 box into a picker.
