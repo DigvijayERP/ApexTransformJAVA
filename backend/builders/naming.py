@@ -159,6 +159,13 @@ def validate_spec(spec: Dict[str, Any]) -> List[str]:
         if f.get("isPrimary") is True:
             pk_count += 1
 
+        if dt in DROPDOWN_TYPES and f.get("needsLookup") is True:
+            problems.append(
+                f"{where} is marked as needing a lookup but has data type '{dt}'. A lookup "
+                f"reads live records from another component and cannot be a dropdown, whose "
+                f"values are a fixed list. Use 'character' with needsLookup."
+            )
+
         if dt in DROPDOWN_TYPES:
             values = f.get("dropdownValues") or []
             if not values:

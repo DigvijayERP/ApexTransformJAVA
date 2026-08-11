@@ -58,7 +58,30 @@ YOUR OUTPUT — plain, structured understanding:
    - Is it a primary key? (yes/no)
    - Is it required? (yes/no)
    - Max length — only if character or url type
+   - Is it a REFERENCE to records in another business component? (yes/no — see below)
    - If dropdown type: list ALL possible dropdown values as code + label pairs (e.g. "OPEN"/"Open", "CLOSED"/"Closed"). Infer reasonable values from the field name and business context if not explicitly provided.
+
+DROPDOWN vs REFERENCE — GET THIS RIGHT, THEY ARE NOT THE SAME:
+
+  A DROPDOWN is a small CLOSED set of states you can name yourself, and which
+  will not change as the business runs: Open/Closed, High/Medium/Low, USD/EUR/GBP.
+
+  A REFERENCE points at LIVE RECORDS in another business component — records
+  that already exist, that you cannot enumerate, and that keep changing as users
+  add more. Signals: "selected from existing X records", "must exist in X",
+  "reference to X", "look up from X", or the field names another entity
+  (customerCode, siteCode, itemNumber, supplierCode, DigSmokeTest reference).
+
+  For a REFERENCE, write:
+      - Data type: character
+      - Reference to another business component: yes — <name the component>
+  and DO NOT list dropdown values. Never invent them. Inventing three plausible
+  codes for a field that is meant to read live records produces a component that
+  looks right and is wrong — the values will not match any real record.
+
+  The "infer reasonable values" instruction above applies ONLY to genuine
+  dropdowns. If you find yourself writing "(assumed values)" for a field that
+  references another component, it is a REFERENCE, not a dropdown.
 5. EVENT HANDLER LOGIC — does this customisation need any? Answer on its own line, exactly:
    HANDLER_NEEDED: yes
    or
@@ -130,6 +153,13 @@ needsLookup RULES:
 - A dropdown is NOT a lookup. A dropdown has a small fixed list of values that you
   enumerate in dropdownValues. A lookup points at a browse of live records that you
   cannot enumerate.
+- OVERRIDE THE SUMMARY WHEN IT IS WRONG. If the requirements summary calls a field a
+  dropdown but ALSO says it references / is selected from / must exist in another
+  business component — or if its listed values look invented ("assumed", or a
+  numbered series like NAME_1, NAME_2, NAME_3) — then it is a LOOKUP, not a
+  dropdown. Emit dataType "character" with "needsLookup": true and NO
+  dropdownValues. A reference field carrying three made-up codes is worse than
+  useless: it will never match a real record.
 - A primary key of THIS BC is not a lookup — it is being created, not chosen.
 - Omit the key entirely when false. Do not guess: a wrong true costs the user a
   configuration dialog they did not need.
