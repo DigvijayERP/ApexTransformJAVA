@@ -58,8 +58,12 @@ function Start() {
             {dryRun ? "Dry run — sends nothing" : "LIVE — writes to QAD on approval"}
           </label>
           <span className="spacer" />
-          <button className="send-btn" disabled={!canSend} onClick={send} aria-label="Start">
-            {working ? "…" : "➤"}
+          {/* Naming the mode on the button itself. A round arrow says nothing
+              about whether this run will touch QAD, and the dry-run default
+              resets on every New run. */}
+          <button className={`start-btn ${dryRun ? "" : "live"}`}
+                  disabled={!canSend} onClick={send}>
+            {working ? "Starting…" : dryRun ? "Start rehearsal" : "Start — writes to QAD"}
           </button>
         </div>
       </div>

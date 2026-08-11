@@ -61,9 +61,18 @@ export function StageGate() {
 
           {!done && (
             <footer className="actions">
-              <button className="primary" disabled={working}
+              {/* The label must state what the click ACTUALLY does. It used to
+                  read "Approve and send" in both modes — in a dry run, "send"
+                  is exactly what it does not do, and the owner twice completed
+                  a whole rehearsal believing components were being created. The
+                  truth belongs at the point of action, not only in a banner. */}
+              <button className={`primary ${runRow?.dry_run ? "rehearse" : ""}`}
+                      disabled={working}
                       onClick={() => approve(activeStage)}>
-                {working ? "Working…" : meta.writes.length ? "Approve and send" : "Approve"}
+                {working ? "Working…"
+                  : !meta.writes.length ? "Approve"
+                  : runRow?.dry_run ? "Approve — rehearse only, sends nothing"
+                  : "Approve and SEND to QAD"}
               </button>
 
               {meta.conditional_on && (

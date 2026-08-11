@@ -234,13 +234,35 @@ textarea { resize: none; font-size: 15px; line-height: 1.6; }
 .dry-pill.on { color: var(--accent); }
 .dry-pill.off { color: var(--warning); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.08); }
 
-.send-btn {
-  width: 36px; height: 36px; border-radius: 50%; padding: 0;
+/* The start button names the mode. A bare arrow said nothing about whether the
+   run would touch QAD, and the dry-run default resets on every New run. */
+.start-btn {
   background: var(--text); color: #000; border: none;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 15px; transition: transform 0.2s, background 0.2s;
+  font-weight: 600; padding: 9px 18px; border-radius: var(--radius-lg);
+  transition: transform 0.2s, background 0.2s;
 }
-.send-btn:hover:not(:disabled) { background: #fff; color: #000; transform: scale(1.05); }
+.start-btn:hover:not(:disabled) { background: #fff; color: #000; transform: translateY(-1px); }
+/* Longhand + parent selector on purpose. The shorthand lost the cascade to
+   `button` state rules whose :hover:not(:disabled) chain outranks a two-class
+   selector, and a live-mode button that renders white is the single most
+   dangerous thing this stylesheet could get wrong. */
+.composer .start-btn.live,
+.composer .start-btn.live:hover:not(:disabled) {
+  background-color: var(--warning);
+  color: #1a1625;
+  box-shadow: 0 2px 10px rgba(251, 191, 36, 0.35);
+}
+.composer .start-btn.live:hover:not(:disabled) { background-color: #fcd34d; }
+
+/* A rehearsal approval is not an accent action — it must not look like the
+   live one, or the two become muscle memory. */
+button.primary.rehearse {
+  background: transparent; color: var(--accent);
+  border-color: rgba(139, 92, 246, 0.45); box-shadow: none;
+}
+button.primary.rehearse:hover:not(:disabled) {
+  background: var(--pill-bg); border-color: var(--accent); color: var(--accent);
+}
 
 .fills-label {
   display: block; margin: 10px 0 6px;
