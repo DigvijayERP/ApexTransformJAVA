@@ -17,9 +17,11 @@ generation for embedded grids. See `PLAN.md` for the phase plan and standing con
 First live contact with `eeadaptive` **confirmed the URL shape** (no `/qad-central/`) but QAD rejected
 the supplied credentials (`invalid_grant`), so live runs are blocked on the owner verifying them.
 
-**Next action:** owner confirms the QAD credentials log in to the eeadaptive **web UI**; then
-`python verify_environment.py` again (read-only). Meanwhile the whole pipeline runs in dry-run:
-backend `uvicorn main:app --port 8000`, frontend `npm run dev`, browse http://localhost:5173.
+**2026-08-11, later:** owner updated the credentials — **authentication now WORKS** (real bearer
+token acquired from eeadaptive, read-only check). Owner also ran the full dry-run in the UI with the
+real LLM and approved the result. **Cleared for the first live test**: small throwaway BC, no lookup
+fields, every gate approved by hand. Environment may still 500 on entity-metadata (known-degraded);
+a failed write does not lock, so that outcome is diagnostic, not fatal.
 
 **Read-order note:** `PHASE0_AUDIT.md` at 583 KB is not readable end to end and is not meant to be.
 `PHASE0_SUMMARY.md` carries one section per audit item, one line per pipeline step, every claim tagged
