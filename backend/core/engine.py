@@ -410,6 +410,44 @@ async def stage_view(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
 
 
 # ── Stage 6: lookups (conditional) ───────────────────────────────────────────
+async def _browse_fields(browse_uri: str) -> List[Dict[str, Any]]:
+    """The fields QAD says a browse offers, straight from its own picker."""
+    if not browse_uri.strip():
+        return []
+    r = await qad_client.call("lookup.browse_fields", params={"browse_uri": browse_uri})
+    return (r.data or {}).get("data") or [] if r.ok else []
+
+
+def _resolve_field(supplied: str, offered: List[Dict[str, Any]], browse_uri: str) -> str:
+    """Match what the user typed to a field QAD actually offers.
+
+    Accepts the full dotted value, or just the column ('testCode'), or the
+    label ('Test Code'). Returns QAD's exact string so the payload carries a
+    value QAD authored rather than one we spelled.
+    """
+    want = (supplied or "").strip()
+    if not want:
+        raise StageError(f"No result field chosen for browse '{browse_uri}'.")
+    if not offered:
+        # The picker gave us nothing - pass the input through rather than block,
+        # and let QAD have the final word.
+        return want
+
+    lowered = want.lower()
+    for f in offered:
+        if str(f.get("field", "")).lower() == lowered:
+            return f["field"]
+    for f in offered:
+        column = str(f.get("field", "")).split(".", 1)[-1]
+        if column.lower() == lowered or str(f.get("fieldLabel", "")).lower() == lowered:
+            return f["field"]
+
+    raise StageError(
+        f"'{want}' is not a field on that browse. QAD offers: "
+        + ", ".join(f"{f.get('field')} ({f.get('fieldLabel')})" for f in offered)
+    )
+
+
 async def stage_lookups(ctx: Dict[str, Any], instruction: str = "",
                         configs: Optional[List[Dict[str, Any]]] = None) -> StageResult:
     spec = _need(ctx, "fields", "spec")
@@ -446,12 +484,24 @@ async def stage_lookups(ctx: Dict[str, Any], instruction: str = "",
 
     built = []
     for cfg in configs:
+        browse_uri = cfg.get("browse_uri", "")
+        # ASK QAD WHICH FIELDS THAT BROWSE OFFERS, rather than deriving them.
+        #
+        # A live POST was rejected with "Invalid URI" because we built the
+        # result field from the browse URI's last segment - 'digsmoketest' -
+        # while QAD's own picker returns 'digSmokeTest.testCode', camelCase.
+        # No naming rule was going to recover that reliably; QAD's list is the
+        # only authority, so the user's input is RESOLVED against it.
+        offered = await _browse_fields(browse_uri)
+        result_field = _resolve_field(cfg.get("result_field", ""), offered, browse_uri)
+        search_field = _resolve_field(cfg.get("search_field", "") or cfg.get("result_field", ""),
+                                      offered, browse_uri)
         browse = lkb.BrowseTarget(
-            uri=cfg.get("browse_uri", ""),
+            uri=browse_uri,
             label=cfg.get("browse_label", ""),
             entity=cfg.get("browse_entity", ""),
-            result_field=cfg.get("result_field", ""),
-            search_field=cfg.get("search_field", ""),
+            result_field=result_field,
+            search_field=search_field,
         )
         built.append(lkb.build_lookup_payload(
             lkb.LookupSpec(

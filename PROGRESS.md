@@ -513,9 +513,12 @@ completely:
 | `ResultField` · `SearchField` · `Reference` | optional |
 | `ConcurrencyHash` · `DataOperation` | update-only markers |
 
-**Eight PascalCase fields.** The payload ported from AUX used **camelCase** and carried **five keys the
-entity does not have** — `appName`, `browseName`, `fieldLabel`, `namespace`, `searchFieldOperator` —
-plus three arrays. AUX never POSTed a lookup, so none of it was ever contradicted. This is the clearest
+**Eight PascalCase fields.** The payload ported from AUX used **camelCase** and carried keys the V1 entity does not have —
+`appName`, `browseName`, `fieldLabel`, `namespace`, `searchFieldOperator` — plus three arrays.
+**CORRECTION (later the same day):** two of those five are real. QAD also has a **V2** lookup entity,
+`urn:be:com.qad.qra.lookupv2.ILookupV2`, which declares `Namespace` and `SearchFieldOperator` (plus
+`DisallowedActions`, `DisallowedActionsMessage`). Only `appName`, `browseName` and `fieldLabel` appear
+on neither. Calling all five invented was an over-claim on my part. AUX never POSTed a lookup, so none of it was ever contradicted. This is the clearest
 vindication of the project's rule that an unexercised payload is a hypothesis, not a fact.
 
 **One ambiguity remains, and both sides are sent.** QAD's *entity* calls the field-set `FieldSet`; the
@@ -553,6 +556,40 @@ other closes the last two unknowns at the same time.
 
 **Nothing else is blocked.** Everything before Lookups works live, and the failed write did not lock —
 the run can resume at that stage the moment the payload is right.
+
+### The capture landed — and QAD's picker replaces derivation entirely (2026-08-11)
+
+Owner captured the Lookup screen's Result Field picker. It is the same generic `browses` endpoint:
+
+```
+GET api/qracore/browses?browseId=urn:browse:custom:lookupBrowseFields
+    &page=1&pageSize=25&pageAction=first
+    &filter=browseURI,eq,<browse uri>,literal
+```
+
+**Exercised ourselves and it works — `page` and `pageAction=first` are REQUIRED**; without them QAD
+returns 200 with zero rows, which is exactly the kind of silent-empty that looks like "no data".
+`relatedResourceUri` is optional.
+
+**It answers the `Invalid URI` directly.** QAD returns:
+
+```
+Test Code    digSmokeTest.testCode
+Description  digSmokeTest.description
+Status       digSmokeTest.statusCode
+```
+
+We were sending **`digsmoketest.testCode`** — derived from the browse URI's last segment, which
+`view_builder` lowercases. QAD wants **`digSmokeTest`**, the BC name camelCased. No naming rule was
+going to recover that reliably, which is the point: **the lookup stage now RESOLVES the user's input
+against QAD's own list** and sends the string QAD authored. Typing `testCode` or `Test Code` both
+resolve; anything else fails locally with the real options listed, instead of as a QAD rejection.
+
+**Also learned: there is a V2 lookup entity.** The picker's `relatedResourceUri` names
+`com.qad.qra.lookupv2.ILookupV2:Lookup.resultField`, while our POST goes to the V1 entity inherited
+from AUX. V2 has four fields V1 lacks. Whether the write should target V2 is **still open** — the Save
+POST body would settle it, along with the `FieldSet` vs `TargetFieldSet` ambiguity and where
+auto-populate targets live.
 
 ## Deferrals — named, not silently dropped (working rule 6)
 
