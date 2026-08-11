@@ -81,6 +81,8 @@ export interface QadWrite {
   ok: boolean;
   locking: boolean;
   request: { method: string; url: string; headers: Record<string, string>; payload: unknown } | null;
+  /** QAD's actual response body. Null for dry-run calls — nothing was sent. */
+  response: unknown;
 }
 
 export interface Run {

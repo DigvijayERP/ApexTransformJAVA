@@ -436,6 +436,30 @@ the first suspect).
 2. `_post_token` now surfaces QAD's OAuth error body (never the URL), which is what turned a mute
    HTTP 400 into the exact diagnosis above.
 
+### 🎉 FIRST LIVE BC CREATED (2026-08-11) — `DigSmokeTest`, end to end
+
+Owner ran the pipeline LIVE against eeadaptive. Every write succeeded: `bc.create` (with a dropdown,
+so the two-save wiring ran for real), `form.save`, `view.register`, and `deployBusinessEntity`.
+**The environment's old HTTP 500 on entity-metadata generation is gone** — deferral D5 can be
+considered resolved by observation.
+
+**The audit trail caught a real sequence worth keeping.** The owner opened the Deploy gate before
+approving View (the rail permits out-of-order navigation). QAD rejected the deploy with its own
+business error — `"There should exist at least one View."` — the failed write correctly did NOT lock,
+the owner approved View, re-approved Deploy, and it succeeded. Three things proven at once:
+
+1. QAD's business-error envelope surfaces properly (`success:false, severity:1`, message shown).
+2. The failed-write-does-not-lock rule works exactly as designed — recovery needed no new run.
+3. **`deployBusinessEntity` is retryable after a rejection** — first idempotency data point.
+
+**Observation, not yet acted on:** stages can be run out of order from the rail. QAD itself caught
+this case; a cheap guard (Deploy's gate requiring all prior stages approved/skipped) would prevent
+the detour. Owner to decide whether to add it.
+
+**Responses are now visible in the UI.** They were ALWAYS recorded (`qad_writes.response`, live calls
+only) and served by the API; the writes panel only rendered requests. Each call now expands to
+"Request sent" + "QAD's response". The deploy gate's warnings response was already real.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

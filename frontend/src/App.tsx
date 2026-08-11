@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { token } from "./api";
 import { useRun } from "./RunContext";
-import { Artifact } from "./components/Artifact";
+import { Payload } from "./components/Artifact";
 import { StageGate } from "./components/StageGate";
 import { StageRail } from "./components/StageRail";
 
@@ -89,17 +89,21 @@ function Writes() {
   return (
     <details className="writes">
       <summary>{state.writes.length} QAD call{state.writes.length === 1 ? "" : "s"} so far</summary>
-      <ul className="plain">
-        {state.writes.map((w, i) => (
-          <li key={i}>
-            <code>{w.endpoint_id}</code>
+      {/* Each call carries the exact request AND QAD's actual response body,
+          straight from the qad_writes audit table. Dry-run calls have no
+          response — nothing was sent — and Payload renders nothing for them. */}
+      {state.writes.map((w, i) => (
+        <details className="payload" key={i}>
+          <summary>
+            <code>{w.endpoint_id}</code>{" "}
             <span className={w.ok ? "ok" : "bad"}>{w.ok ? "ok" : "failed"}</span>
             {w.dry_run && <em className="tag">dry run</em>}
-            {!w.locking && <em className="tag" title="does not lock regeneration">probe</em>}
-          </li>
-        ))}
-      </ul>
-      <Artifact kind={undefined} artifact={{ calls: state.writes.map((w) => w.request) }} />
+            {!w.locking && <em className="tag" title="fired while rendering a gate; does not lock regeneration">probe</em>}
+          </summary>
+          <Payload value={w.request} label="Request sent" />
+          <Payload value={w.response} label="QAD's response" />
+        </details>
+      ))}
     </details>
   );
 }
