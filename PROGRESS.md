@@ -471,6 +471,33 @@ checks, or any other behavior beyond storing data"), so **stage 4 will skip itse
 exercise of a conditional stage. `DigSmokeTest` needed a handler; this one does not. The signal is
 discriminating, not constant.
 
+### A completed rehearsal looked exactly like a completed deployment (2026-08-11)
+
+Owner reported a "huge bug": `DigLookupTest` showed Deploy ✓ in the app but did not exist in QAD.
+**The pipeline was correct** — that run was a DRY RUN (`live_calls=0, rehearsed_calls=6`), so nothing
+was ever sent. The bug was the interface.
+
+**How it happened, from the run table.** `DigSmokeTest` ran LIVE (8 real calls, exists in QAD). The
+owner then started `DigLookupTest` LIVE, abandoned it on the dropdown bug, and clicked **New run** —
+which resets the dry-run pill to its safe default. Nothing said so loudly, and the finished screen was
+*identical to a real success*: seven green ticks, "Deploy ✓", one small corner badge.
+
+**A rehearsal that reads as an accomplishment is worse than no feedback at all.** The run view now
+carries a full-width mode stripe that changes with both mode and completion:
+
+| | |
+|---|---|
+| dry, running | violet — "DRY RUN — nothing is being sent to QAD" |
+| dry, complete | violet — "REHEARSAL COMPLETE — nothing was created in QAD", and how to do it for real |
+| live, running | amber — "LIVE — approving a stage writes to QAD" |
+| live, complete | green — "CREATED IN QAD", naming the component and how to verify it |
+
+The header badge now reads **LIVE** as well as **DRY RUN**, rather than being absent when live —
+absence of a warning is not a signal.
+
+The default stays dry-run. Defaulting to safe is right; the fix is making the safety *visible*, not
+remembering a dangerous setting across runs.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

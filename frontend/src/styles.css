@@ -152,6 +152,27 @@ textarea { resize: none; font-size: 15px; line-height: 1.6; }
 }
 .banner.error p { color: var(--error); }
 
+/* Run mode. A rehearsal must never be mistakable for a real deployment, so
+   these read as a stripe across the whole run rather than a corner badge. */
+.banner.mode-dry {
+  background: var(--pill-bg); border-color: rgba(139, 92, 246, 0.4);
+  border-left: 3px solid var(--accent);
+}
+.banner.mode-dry p { color: var(--text); }
+.banner.mode-dry strong { color: var(--accent); letter-spacing: 0.02em; }
+
+.banner.mode-live {
+  background: rgba(251, 191, 36, 0.08); border-color: rgba(251, 191, 36, 0.4);
+  border-left: 3px solid var(--warning);
+}
+.banner.mode-live p { color: var(--text); }
+.banner.mode-live strong { color: var(--warning); }
+.banner.mode-live.done {
+  background: rgba(167, 139, 250, 0.1); border-color: rgba(167, 139, 250, 0.45);
+  border-left-color: var(--success);
+}
+.banner.mode-live.done strong { color: var(--success); }
+
 .warn { color: var(--warning); font-size: 13px; margin: 6px 0; }
 .warn.locked { border-left: 3px solid var(--warning); padding-left: 10px; }
 

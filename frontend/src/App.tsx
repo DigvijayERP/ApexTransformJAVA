@@ -83,6 +83,44 @@ function Start() {
   );
 }
 
+/** Whether this run is a rehearsal must be impossible to miss.
+ *
+ *  A completed dry run previously looked IDENTICAL to a real one — every stage
+ *  ticked, "Deploy ✓" — with only a small badge in the corner to say otherwise.
+ *  The owner reasonably concluded a component had been created and went looking
+ *  for it in QAD. A rehearsal that reads as an accomplishment is worse than no
+ *  feedback at all. */
+function RunMode() {
+  const { state } = useRun();
+  const run = state.run;
+  if (!run) return null;
+  const done = run.status === "complete";
+
+  if (run.dry_run) {
+    return (
+      <div className="banner mode-dry">
+        <p>
+          <strong>{done ? "REHEARSAL COMPLETE — nothing was created in QAD." : "DRY RUN — nothing is being sent to QAD."}</strong>{" "}
+          {done
+            ? "Every payload below was built and checked but never sent. To create this for real, start a new run and switch the dry-run pill off first."
+            : "Every payload is built and shown exactly as it would be sent, then discarded."}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`banner mode-live${done ? " done" : ""}`}>
+      <p>
+        <strong>{done ? "CREATED IN QAD." : "LIVE — approving a stage writes to QAD."}</strong>{" "}
+        {done
+          ? `${run.bc_pascal} was deployed. Verify it by opening the view in QAD and saving a record.`
+          : "QAD has no undo, so each gate shows the exact payload before it is sent."}
+      </p>
+    </div>
+  );
+}
+
 function Writes() {
   const { state } = useRun();
   if (!state.writes.length) return null;
@@ -121,7 +159,9 @@ export default function App() {
         {started && (
           <div className="run-meta">
             <span>{state.run?.bc_pascal ?? "unnamed"}</span>
-            {state.run?.dry_run && <em className="tag">dry run</em>}
+            <em className={`tag ${state.run?.dry_run ? "" : "write"}`}>
+              {state.run?.dry_run ? "dry run" : "live"}
+            </em>
             <button className="ghost" onClick={reset}>New run</button>
           </div>
         )}
@@ -139,6 +179,7 @@ export default function App() {
 
         {!started ? <Start /> : (
           <>
+            <RunMode />
             <div className="user-bubble">
               <div className="user-bubble-label">Your request</div>
               {state.run?.user_input}
