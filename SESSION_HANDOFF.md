@@ -63,6 +63,7 @@ Stage 6 skips itself when nothing was marked at stage 2.
 | Docs grounding — all four bundles found | `core/docs_loader.py` |
 | Read-only environment check | `verify_environment.py` |
 | **API layer** — 12 routes, auth seam on every mutating one | `main.py`, `routers/` |
+| **Frontend** — 8 source files, 2 runtime deps, no Zustand | `frontend/src/` |
 
 **274 offline assertions pass. Run all four after any change — no network, no credentials, no key:**
 
@@ -70,11 +71,24 @@ Stage 6 skips itself when nothing was marked at stage 2.
 cd backend && python smoke_test.py && python store_test.py && python pipeline_test.py && python api_test.py
 ```
 
-Start the server with:
+### Running it
+
+Two terminals. **The harness's `.claude/launch.json` resolves from `aux_web_version`, not here**, so
+`preview_start` will start AUX's dev server rather than this one — run these yourself:
 
 ```bash
-cd backend && uvicorn main:app --reload --port 8000
+cd D:\WEB_AUXdaptive_java_versionackend && uvicorn main:app --reload --port 8000
 ```
+
+```bash
+cd D:\WEB_AUXdaptive_java_versionrontend && npm install && npm run dev
+```
+
+Then open http://localhost:5173. Vite proxies `/api` to port 8000.
+
+⚠️ **The UI has NOT been verified in a browser yet.** It typechecks clean and builds clean
+(36 modules, 51 KB gzipped), and the API beneath it has 49 assertions over real HTTP — but nobody has
+watched it render. That is the first thing to do next session.
 
 Three things a fresh session should understand before changing anything here:
 

@@ -1,0 +1,106 @@
+// The gate: what a stage produced, and the decision it is waiting on.
+//
+// Approving is what fires the QAD writes — running a stage never does. So the
+// payload shown here is exactly what is about to be sent, and dry-run looks
+// identical to live.
+
+import { useState } from "react";
+import { useRun } from "../RunContext";
+import { Artifact } from "./Artifact";
+
+export function StageGate() {
+  const { state, stageMeta, run, approve, regenerate, skip } = useRun();
+  const { activeStage, gate, busy, run: runRow } = state;
+  const [steer, setSteer] = useState("");
+
+  if (!activeStage) return null;
+  const meta = stageMeta(activeStage);
+  if (!meta) return null;
+
+  const status = state.stages.find((s) => s.id === activeStage);
+  const blocked = gate?.can_regenerate === false;
+  const done = status?.status === "approved" || status?.status === "skipped";
+  const working = busy !== null;
+
+  return (
+    <article className="gate">
+      <header>
+        <h2>{meta.number}. {meta.label}</h2>
+        <p className="muted">{meta.description}</p>
+        {meta.writes.length > 0 && (
+          <p className="writes-note">
+            Approving sends {meta.writes.length} call{meta.writes.length === 1 ? "" : "s"} to QAD
+            {runRow?.dry_run && <strong> — dry run, nothing will actually be sent</strong>}.
+          </p>
+        )}
+      </header>
+
+      {!gate ? (
+        <div className="empty">
+          <p>This stage has not run yet.</p>
+          <button disabled={working} onClick={() => run(activeStage)}>
+            {working ? "Working…" : `Run ${meta.label.toLowerCase()}`}
+          </button>
+        </div>
+      ) : gate.skipped ? (
+        <div className="empty"><p className="muted">Skipped — {gate.reason}</p></div>
+      ) : (
+        <>
+          {(gate.warnings ?? []).map((w, i) => (
+            <p key={i} className="warn">{w}</p>
+          ))}
+
+          <div className="artifact">
+            <Artifact
+              kind={meta.artifact_kind}
+              artifact={gate.artifact ?? {}}
+              onBrowseUris={(browse_uris) => run(activeStage, { browse_uris })}
+            />
+          </div>
+
+          {!done && (
+            <footer className="actions">
+              <button className="primary" disabled={working}
+                      onClick={() => approve(activeStage)}>
+                {working ? "Working…" : meta.writes.length ? "Approve and send" : "Approve"}
+              </button>
+
+              {meta.conditional_on && (
+                <button className="ghost" disabled={working}
+                        onClick={() => skip(activeStage, "Not needed for this component")}>
+                  Skip
+                </button>
+              )}
+
+              <div className="steer">
+                <input
+                  value={steer}
+                  disabled={working || blocked}
+                  placeholder="Tell it what to change, then regenerate…"
+                  onChange={(e) => setSteer(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && steer.trim() && !blocked) {
+                      regenerate(activeStage, { instruction: steer });
+                      setSteer("");
+                    }
+                  }}
+                />
+                <button
+                  className="ghost"
+                  disabled={working || blocked || !steer.trim()}
+                  onClick={() => { regenerate(activeStage, { instruction: steer }); setSteer(""); }}
+                >
+                  Regenerate
+                </button>
+              </div>
+
+              {blocked && (
+                <p className="warn locked">{gate.regenerate_blocked_because}</p>
+              )}
+            </footer>
+          )}
+        </>
+      )}
+    </article>
+  );
+}
