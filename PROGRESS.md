@@ -498,6 +498,42 @@ absence of a warning is not a signal.
 The default stays dry-run. Defaulting to safe is right; the fix is making the safety *visible*, not
 remembering a dangerous setting across runs.
 
+### 🔴 The lookup payload was substantially invented — QAD settled it (2026-08-11)
+
+First live lookup POST rejected: `Field is mandatory. (ResultField); Field is mandatory.
+(TargetFieldSet)`. Rather than guess at names, **asked QAD to describe its own Lookup entity** —
+`GET entitymetadatas?entityURI=urn:be:com.qad.qra.lookup.ILookup` — which is read-only and answered
+completely:
+
+| Field | |
+|---|---|
+| `BrowseURI` | **required** |
+| `FieldSet` | **required** |
+| `ModuleURI` | **required** |
+| `ResultField` · `SearchField` · `Reference` | optional |
+| `ConcurrencyHash` · `DataOperation` | update-only markers |
+
+**Eight PascalCase fields.** The payload ported from AUX used **camelCase** and carried **five keys the
+entity does not have** — `appName`, `browseName`, `fieldLabel`, `namespace`, `searchFieldOperator` —
+plus three arrays. AUX never POSTed a lookup, so none of it was ever contradicted. This is the clearest
+vindication of the project's rule that an unexercised payload is a hypothesis, not a fact.
+
+**One ambiguity remains, and both sides are sent.** QAD's *entity* calls the field-set `FieldSet`; the
+*validator that rejected us* called it `TargetFieldSet`. Both keys carry the same value — an
+unrecognised key is ignored, a missing mandatory one is not. **Which one QAD actually consumes is
+still unknown**; if the next POST succeeds we will not learn which, and that is worth settling later
+from a captured save.
+
+**Auto-populate and search conditions are no longer sent.** QAD's Lookup entity declares no field for
+either, so where they belong is unknown — most likely a child collection with its own endpoint. They
+are reported in the stage summary and named in the gate's warnings rather than smuggled under a guessed
+key, which is exactly the mistake that produced the invented keys above. Configure them in QAD's Lookup
+Definition screen for now.
+
+Two of the three long-standing lookup unknowns are therefore closed by evidence:
+`searchFieldOperator` does not exist at all, and `uri`/`modelId` were correctly omitted (the entity has
+neither; it has `ConcurrencyHash`, which belongs to an update).
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

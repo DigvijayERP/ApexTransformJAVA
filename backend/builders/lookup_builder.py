@@ -213,35 +213,65 @@ def build_lookup_payload(
         for r in lookup.additional_results
     ]
 
+    # FIELD NAMES COME FROM QAD ITSELF, not from the UI labels.
+    #
+    # A live POST on 2026-08-11 was rejected with "Field is mandatory.
+    # (ResultField); Field is mandatory. (TargetFieldSet)". Asking QAD to
+    # describe its own Lookup entity -
+    #   GET entitymetadatas?entityURI=urn:be:com.qad.qra.lookup.ILookup
+    # - returns exactly eight fields, all PascalCase:
+    #
+    #   BrowseURI  REQUIRED   FieldSet   REQUIRED   ModuleURI  REQUIRED
+    #   ResultField           SearchField           Reference
+    #   ConcurrencyHash       DataOperation
+    #
+    # The payload ported from AUX used camelCase AND five keys that do not
+    # exist on the entity at all - appName, browseName, fieldLabel, namespace,
+    # searchFieldOperator - plus three array members. AUX never POSTed a
+    # lookup, so none of that was ever contradicted.
     lookup_obj = {
-        "appName": ident.app_name,
-        "browseName": lookup.browse.label,
-        "browseURI": lookup.browse.uri,
-        "fieldLabel": field_label,
-        "fieldSet": field_uri,
-        "moduleURI": ident.module_uri,
-        "namespace": ident.module,
-        "reference": "",                       # confirmed empty, C4:195
-        "resultField": lookup.browse.result_field,
-        "searchField": lookup.browse.search_field,
-        "searchFieldOperator": lookup.operator or DEFAULT_SEARCH_OPERATOR,
-        "lookupQualifiers": [],                # confirmed empty for a static lookup
-        "lookupResultFields": result_fields,
-        "lookupSearchConditions": conditions,
-        # Deliberately omitted, unconfirmed: uri, modelId, concurrencyHash.
+        "BrowseURI": lookup.browse.uri,
+        "ModuleURI": ident.module_uri,
+        "ResultField": lookup.browse.result_field,
+        "SearchField": lookup.browse.search_field,
+        "Reference": "",                       # confirmed empty, C4:195
+        # TWO SURFACES OF QAD DISAGREE ON THIS ONE NAME. The entity calls it
+        # FieldSet; the validator that rejected us called it TargetFieldSet.
+        # Both are sent with the same value: an unrecognised key is ignored,
+        # a missing mandatory one is not. Which one QAD actually consumes is
+        # still unknown - see PROGRESS.md.
+        "FieldSet": field_uri,
+        "TargetFieldSet": field_uri,
     }
+    # Deliberately NOT sent: ConcurrencyHash and DataOperation (optimistic-lock
+    # and operation markers that belong to an update, not a create), and every
+    # key AUX invented. Auto-populate and search conditions have no home on
+    # this entity - see below.
+
+    unverified = list(UNVERIFIED)
+    if result_fields or conditions:
+        # Carried in the summary so the gate can show what was asked for, but
+        # NOT in the payload: QAD's Lookup entity has no field for either, so
+        # sending them under a guessed name would be exactly the mistake that
+        # produced the invented keys above.
+        unverified.append(
+            "Auto-populate targets and search conditions are NOT in the payload. QAD's Lookup "
+            "entity declares no field for them, so where they belong is unknown - most likely a "
+            "child collection reached by its own endpoint. Configure them in QAD's Lookup "
+            "Definition screen for now, or capture that screen's save request to settle it."
+        )
 
     return {
         "status": "built",
         "payload": {"lookups": [lookup_obj]},
-        "unverified": list(UNVERIFIED),
+        "unverified": unverified,
         "summary": {
             "bc_pascal": bc,
             "field_code": code,
             "field_uri": field_uri,
             "browse_uri": lookup.browse.uri,
             "result_field": lookup.browse.result_field,
-            "auto_populates": [r["target"] for r in result_fields],
+            "auto_populates_requested": [r["target"] for r in result_fields],
         },
     }
 

@@ -281,13 +281,26 @@ def main() -> int:
         ),
         SPEC, uris, ident)
     row = built["payload"]["lookups"][0]
-    check("fieldSet reuses the BC's own field URI", row["fieldSet"], uris["customerName"])
-    check("namespace", row["namespace"], "com.yash.digwish")
-    check("appName", row["appName"], "digwish")
-    check("reference empty, per the confirmed record", row["reference"], "")
-    check("qualifiers empty for a static lookup", row["lookupQualifiers"], [])
-    check("auto-populate carried through", len(row["lookupResultFields"]), 1)
-    check("unverified items are reported, not hidden", len(built["unverified"]), 2)
+    # QAD's own Lookup entity declares exactly eight PascalCase fields. A live
+    # POST rejected the camelCase payload ported from AUX, which also carried
+    # five keys the entity does not have.
+    check("keys are PascalCase, as QAD declares them", sorted(row),
+          ["BrowseURI", "FieldSet", "ModuleURI", "Reference", "ResultField",
+           "SearchField", "TargetFieldSet"])
+    check("field set reuses the BC's own field URI", row["FieldSet"], uris["customerName"])
+    check("and is sent under the validator's name too",
+          row["TargetFieldSet"], uris["customerName"])
+    check("browse uri", row["BrowseURI"], target.uri)
+    check("module uri", row["ModuleURI"], "urn:app:com.yash.digwish")
+    check("reference empty, per the confirmed record", row["Reference"], "")
+    # The keys AUX invented must never come back.
+    check("no invented keys",
+          [k for k in ("appName", "browseName", "fieldLabel", "namespace",
+                       "searchFieldOperator", "lookupQualifiers",
+                       "lookupResultFields", "lookupSearchConditions") if k in row], [])
+    check("auto-populate is reported but not sent under a guessed name",
+          built["summary"]["auto_populates_requested"], ["SmokeOrder_quantityAutoField2"])
+    check("and that gap is surfaced", len(built["unverified"]), 3)
 
     section("13. Lookup — refuses to send an incomplete config")
     blank = lk.BrowseTarget(uri="", label="X", entity="x", result_field="", search_field="")
