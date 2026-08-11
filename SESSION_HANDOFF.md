@@ -62,11 +62,18 @@ Stage 6 skips itself when nothing was marked at stage 2.
 | All eight prompts, as **templates** | `agents/prompts.py` |
 | Docs grounding — all four bundles found | `core/docs_loader.py` |
 | Read-only environment check | `verify_environment.py` |
+| **API layer** — 12 routes, auth seam on every mutating one | `main.py`, `routers/` |
 
-**225 offline assertions pass. Run all three after any change — no network, no credentials, no key:**
+**274 offline assertions pass. Run all four after any change — no network, no credentials, no key:**
 
 ```bash
-cd backend && python smoke_test.py && python store_test.py && python pipeline_test.py
+cd backend && python smoke_test.py && python store_test.py && python pipeline_test.py && python api_test.py
+```
+
+Start the server with:
+
+```bash
+cd backend && uvicorn main:app --reload --port 8000
 ```
 
 Three things a fresh session should understand before changing anything here:
@@ -88,13 +95,17 @@ a test asserts AUX's namespace never appears in a rendered prompt.
 
 ### Next
 
-1. **Port the ABL parsers** — `progress_parser.py` (414 lines) and `lookup_detector.py` (585). They
+1. **The frontend** — `RunContext` (`useReducer`, no Zustand) and the stage dialog. Render the stage
+   list from `GET /api/run/stages`; keep NO step table in the frontend.
+2. **Port the ABL parsers** — `progress_parser.py` (414 lines) and `lookup_detector.py` (585). They
    feed four stages: requirements, the field spec, whether a handler is needed, and lookup candidates.
    Both are untracked in-flight work in AUX. Until then, `handler_hint` comes from the model's
    `HANDLER_NEEDED:` line rather than from the source.
-2. **The API layer** — `POST /api/run/{id}/stage/{stage}` plus approve / regenerate / skip.
-3. **The frontend** — `RunContext` (`useReducer`, no Zustand) and the stage dialog.
-4. **First live call**: `python verify_environment.py <entityURI>` — read-only, writes nothing.
+3. **First live call**: `python verify_environment.py <entityURI>` — read-only, writes nothing.
+
+⚠️ **Set `ADAPTIVE_API_TOKEN` in `backend/.env` before this server is reachable by anything but
+localhost.** Without it the approve and deploy endpoints are unauthenticated — `GET /api/health`
+reports `auth_enforced: false` and says so in `warnings`.
 
 **Dry-run is the default and stays so until the owner greenlights live writes.**
 
