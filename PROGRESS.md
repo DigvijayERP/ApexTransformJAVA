@@ -460,6 +460,17 @@ the detour. Owner to decide whether to add it.
 only) and served by the API; the writes panel only rendered requests. Each call now expands to
 "Request sent" + "QAD's response". The deploy gate's warnings response was already real.
 
+### Dropdown-vs-reference fix verified live (2026-08-11)
+
+Re-ran the same prompt after the prompt fix. Stage 1 now reports
+`smokeTestReference` as **character, REFERENCE: yes — DigSmokeTest**, with no invented values —
+where before it emitted a dropdown with `SMOKE_TEST_1/2/3` marked "(assumed values)".
+
+It also answered **`HANDLER_NEEDED: no`** with sound reasoning ("no validation rules, cross-field
+checks, or any other behavior beyond storing data"), so **stage 4 will skip itself** — the first live
+exercise of a conditional stage. `DigSmokeTest` needed a handler; this one does not. The signal is
+discriminating, not constant.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |
