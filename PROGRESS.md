@@ -648,6 +648,40 @@ retries) is per-provider, so OpenAI keeps the SDK defaults rather than inheritin
 **Stages 5, 6 and 7 make no model calls at all**, so a lookup or deploy test needs no key and no
 waiting. That is how the lookup fix can be tested while credits are out.
 
+### 🔴 QAD's validator named the lookupResultFields element keys — three bugs, one live POST (2026-08-12)
+
+The `DigOrderTest` run's live lookup POST failed with two code-571 "Field is mandatory" errors. Their
+`context` paths point **inside the array element**:
+
+```
+/lookups/lookups/0/lookupResultFields/0/ResultField
+/lookups/lookups/0/lookupResultFields/0/TargetFieldSet
+```
+
+That settles the one remaining screenshot-derived unknown, and it corrects the 2026-08-11 reading
+(that the errors meant unresolved *values*). The element keys are `resultField` / `targetFieldSet`
+(camelCase on the wire, PascalCase in validation messages — same split as the parent object). We had
+sent `{field, target}`, so QAD deserialized both mandatory members as empty. Every past failed
+attempt carried a fill and shows the identical pair, so the diagnosis is not one bad sample.
+
+Three fixes landed:
+
+1. **Element keys renamed** in `lookup_builder.py`. Still flagged unverified: the element *value*
+   formats (dotted browse column; form field name for the target), until a fill-carrying save succeeds.
+2. **`resolve_url` now substitutes `{placeholders}` embedded mid-value.** It only substituted
+   whole-value `"{name}"`, so `lookup.browse_fields`' filter went to QAD with literal braces, matched
+   nothing, and returned 200 with zero rows — which is why `digsmoketest.testCode` passed through
+   uncorrected instead of resolving to `digSmokeTest.testCode`. Silent, because an empty picker is
+   also a legal answer. The same fix repairs `sss.deploy`'s `{app_script_name}dev` for later phases.
+   **Verified live** post-fix: the picker returns DigSmokeTest's four fields, camelCase, including
+   the `status` → `statusCode` SQL-safe rename.
+3. **Fills now carry their own source column.** The UI sent every checked fill with the main result
+   field as its source, so ticking Order Date would have filled it with a *test code*. Each ticked
+   fill now gets a browse-column input (required before Build enables), and the engine resolves each
+   fill's source against QAD's picker exactly like the main field.
+
+Both suites pass. The backend must be restarted to pick these up before re-running the Lookups gate.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

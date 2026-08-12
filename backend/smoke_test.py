@@ -298,10 +298,13 @@ def main() -> int:
     check("namespace is the first two module segments", row["namespace"], "com.yash")
     check("concurrencyHash null on create", row["concurrencyHash"], None)
     check("reference empty, per the confirmed record", row["reference"], "")
-    check("auto-populate now has a home on the payload",
-          row["lookupResultFields"], [{"field": "training.location",
-                                       "target": "SmokeOrder_quantityAutoField2"}])
-    check("its element shape is flagged as screenshot-derived",
+    # Element keys named by QAD's own code-571 context paths, 2026-08-12:
+    # /lookups/lookups/0/lookupResultFields/0/ResultField|TargetFieldSet.
+    check("auto-populate element keys are resultField/targetFieldSet",
+          row["lookupResultFields"],
+          [{"resultField": "training.location",
+            "targetFieldSet": "SmokeOrder_quantityAutoField2"}])
+    check("its value formats stay flagged until a fill-carrying save succeeds",
           len(built["unverified"]), 1)
 
     section("13. Lookup — refuses to send an incomplete config")

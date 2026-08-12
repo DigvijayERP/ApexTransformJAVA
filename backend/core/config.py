@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -294,17 +295,23 @@ def resolve_url(endpoint_id: str, params: Optional[Dict[str, str]] = None) -> st
 
     url = base_url() + "/" + _join(context_root(), root, path)
 
+    # Substitute {placeholders} ANYWHERE in a value, not only when the value is
+    # exactly "{name}". lookup.browse_fields embeds one mid-string
+    # ("browseURI,eq,{browse_uri},literal"); the whole-value-only check sent
+    # the braces to QAD literally, which matched nothing and returned 200 with
+    # zero rows - so the failure was silent.
+    def _substitute(match: "re.Match[str]") -> str:
+        name = match.group(1)
+        if name not in supplied:
+            raise ConfigError(
+                f"Endpoint '{endpoint_id}' needs a value for '{name}' and none was supplied."
+            )
+        return str(supplied[name])
+
     query = entry.get("query") or {}
     pairs = []
     for key, raw in query.items():
-        value = str(raw)
-        if value.startswith("{") and value.endswith("}"):
-            name = value[1:-1]
-            if name not in supplied:
-                raise ConfigError(
-                    f"Endpoint '{endpoint_id}' needs a value for '{name}' and none was supplied."
-                )
-            value = str(supplied[name])
+        value = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _substitute, str(raw))
         pairs.append(f"{quote(key, safe='')}={quote(value, safe='')}")
 
     return f"{url}?{'&'.join(pairs)}" if pairs else url

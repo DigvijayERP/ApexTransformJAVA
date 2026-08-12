@@ -209,8 +209,16 @@ def build_lookup_payload(
             "__gridLockedDummyColumn": "",
         })
 
+    # Element keys SETTLED BY QAD'S OWN VALIDATOR, 2026-08-12. A live POST with
+    # the screenshot-derived {field, target} came back with two code-571 errors
+    # whose context paths point INSIDE the element:
+    #     /lookups/lookups/0/lookupResultFields/0/ResultField
+    #     /lookups/lookups/0/lookupResultFields/0/TargetFieldSet
+    # i.e. QAD deserialized its resultField/targetFieldSet members as empty
+    # because our keys did not match. Same camelCase-wire/PascalCase-validation
+    # split as the parent object.
     result_fields = [
-        {"field": str(r["field"]), "target": str(r["target"])}
+        {"resultField": str(r["field"]), "targetFieldSet": str(r["target"])}
         for r in lookup.additional_results
     ]
 
@@ -231,10 +239,11 @@ def build_lookup_payload(
     #   * `namespace` is the module's FIRST TWO SEGMENTS ("com.yash"), not the
     #     whole module - a detail no rule would have produced.
     #
-    # The earlier "Field is mandatory (ResultField)/(TargetFieldSet)" therefore
-    # did not mean the keys were wrong. It meant the VALUES did not resolve:
-    # resultField was 'digsmoketest.testCode' where QAD holds
-    # 'digSmokeTest.testCode'. QAD reports an unresolvable value as missing.
+    # CORRECTION 2026-08-12: the "Field is mandatory (ResultField)/
+    # (TargetFieldSet)" errors were NOT about top-level value resolution as
+    # first read. Their context paths sit inside lookupResultFields/0, so they
+    # were about the ELEMENT keys - see the note above result_fields below.
+    # QAD never complained about the top-level resultField's case.
     parts = ident.module.split(".")
     namespace = ".".join(parts[:2]) if len(parts) >= 2 else ident.module
 
@@ -267,13 +276,14 @@ def build_lookup_payload(
 
     unverified = []
     if result_fields:
-        # The captured Save carried lookupResultFields as an empty array, so the
-        # member is confirmed but the ELEMENT shape is not. {field, target} comes
-        # from class 4 p.13's screenshot, not from the wire.
+        # Element KEYS are confirmed (QAD's validator named them, 2026-08-12).
+        # The VALUE formats - dotted browse column for resultField, form field
+        # name for targetFieldSet - still come from the class 4 p.13 screenshot
+        # and are unconfirmed until a save with a fill succeeds.
         unverified.append(
-            "lookupResultFields is confirmed present, but its element shape {field, target} comes "
-            "from a screenshot (class 4 p.13), not from a captured wire value - the captured Save "
-            "had none configured."
+            "lookupResultFields element keys are confirmed by QAD's validator, but the value "
+            "formats (dotted browse column; form field name) come from a screenshot (class 4 "
+            "p.13) and are unconfirmed until a save with a fill succeeds."
         )
 
     return {
@@ -286,7 +296,7 @@ def build_lookup_payload(
             "field_uri": field_uri,
             "browse_uri": lookup.browse.uri,
             "result_field": lookup.browse.result_field,
-            "auto_populates_requested": [r["target"] for r in result_fields],
+            "auto_populates_requested": [r["targetFieldSet"] for r in result_fields],
         },
     }
 

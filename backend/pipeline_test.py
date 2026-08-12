@@ -251,12 +251,13 @@ async def main() -> int:
     check("one lookup built", len(art["lookups"]), 1)
     check("fieldSet is the URI stage 2 created", art["lookups"][0]["field_uri"],
           "urn:field:com.yash.digwish.PipelineOrder.IPipelineOrder:PipelineOrder.customerName")
-    # Down to one: the captured Save settled searchFieldOperator ("ge" for
-    # "greater or equal to", so short codes) and concurrencyHash (null on
-    # create). Only lookupResultFields' ELEMENT shape is still screenshot-derived.
+    # Down to one: the captured Save settled searchFieldOperator, the
+    # concurrencyHash, and (2026-08-12, via QAD's own code-571 context paths)
+    # the lookupResultFields element KEYS. Only the element VALUE formats are
+    # still screenshot-derived, pending the first fill-carrying save.
     check("one unverified item remains", len(out["warnings"]), 1)
-    check("and it names the element shape",
-          any("element shape" in w for w in out["warnings"]), True)
+    check("and it names the element value formats",
+          any("value" in w and "lookupResultFields" in w for w in out["warnings"]), True)
     await engine.approve_stage(run_id, "lookups", **db)
 
     section("8. Stage 7 — deploy, terminal")

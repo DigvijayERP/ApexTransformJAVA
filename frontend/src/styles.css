@@ -271,6 +271,12 @@ button.primary.rehearse:hover:not(:disabled) {
 }
 .fills { display: flex; flex-wrap: wrap; gap: 8px; }
 .fills .dry-pill input { display: inline-block; width: auto; margin: 0; accent-color: var(--accent); }
+/* The browse column a ticked fill pulls from; lives inside the pill. */
+.fills .dry-pill input.fill-source {
+  width: 180px; font-size: 12px; font-weight: 400; padding: 3px 8px;
+  background: var(--hover); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text);
+}
 
 .example-prompts { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 560px; margin-top: 4px; }
 .example-prompt {

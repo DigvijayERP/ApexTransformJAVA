@@ -503,11 +503,21 @@ async def stage_lookups(ctx: Dict[str, Any], instruction: str = "",
             result_field=result_field,
             search_field=search_field,
         )
+        # Each fill's SOURCE column gets the same resolution as the result
+        # field. Before 2026-08-12 the frontend defaulted every fill's source
+        # to the main result field, which would have filled Order Date with a
+        # test code; now it sends a per-fill column and QAD's list corrects
+        # its case here.
+        additional = [
+            {"field": _resolve_field(str(r.get("field", "")), offered, browse_uri),
+             "target": str(r.get("target", ""))}
+            for r in cfg.get("additional_results", [])
+        ]
         built.append(lkb.build_lookup_payload(
             lkb.LookupSpec(
                 field_code=cfg["field_code"],
                 browse=browse,
-                additional_results=cfg.get("additional_results", []),
+                additional_results=additional,
             ),
             spec, uris, ident))
 

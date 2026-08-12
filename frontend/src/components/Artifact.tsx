@@ -172,18 +172,26 @@ function entityOf(uri: string): string {
   return tail.trim();
 }
 
+// One entry per field: the browse it points at, the column it returns, and
+// which other form fields it should fill in. `fills` maps a form-field target
+// to the browse column that supplies it; a fill without its own column would
+// otherwise repeat the main result field, which is never what a fill means.
+type LookupCfg = { uri: string; field: string; fills: Record<string, string> };
+
 function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => void }) {
   const fields: Bag[] = a.fields ?? [];
-  // One entry per field: the browse it points at, the column it returns, and
-  // which other form fields it should fill in.
-  const [cfg, setCfg] = useState<Record<string, { uri: string; field: string; fills: string[] }>>(
-    () => Object.fromEntries(fields.map((f) => [f.code, { uri: "", field: "", fills: [] }])),
+  const [cfg, setCfg] = useState<Record<string, LookupCfg>>(
+    () => Object.fromEntries(fields.map((f) => [f.code, { uri: "", field: "", fills: {} }])),
   );
 
-  const set = (code: string, patch: Partial<{ uri: string; field: string; fills: string[] }>) =>
+  const set = (code: string, patch: Partial<LookupCfg>) =>
     setCfg((c) => ({ ...c, [code]: { ...c[code], ...patch } }));
 
-  const ready = fields.every((f) => cfg[f.code]?.uri.trim() && cfg[f.code]?.field.trim());
+  const ready = fields.every((f) => {
+    const c = cfg[f.code];
+    return c?.uri.trim() && c?.field.trim()
+      && Object.values(c.fills).every((src) => src.trim());
+  });
 
   const build = () => onConfigure?.(fields.map((f) => {
     const c = cfg[f.code];
@@ -196,7 +204,10 @@ function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => vo
       browse_entity: entity,
       result_field: dotted,
       search_field: dotted,
-      additional_results: c.fills.map((target) => ({ field: dotted, target })),
+      additional_results: Object.entries(c.fills).map(([target, source]) => ({
+        field: `${entity}.${source.trim()}`,
+        target,
+      })),
     };
   }));
 
@@ -240,21 +251,43 @@ function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => vo
               <>
                 <span className="fills-label">Also fill in when a value is picked</span>
                 <div className="fills">
-                  {opts.map((o) => (
-                    <label key={o.target} className="dry-pill">
-                      <input
-                        type="checkbox"
-                        checked={c.fills.includes(o.target)}
-                        onChange={(e) => set(f.code, {
-                          fills: e.target.checked
-                            ? [...c.fills, o.target]
-                            : c.fills.filter((t) => t !== o.target),
-                        })}
-                      />
-                      {o.label}
-                    </label>
-                  ))}
+                  {opts.map((o) => {
+                    const checked = o.target in c.fills;
+                    return (
+                      <label key={o.target} className="dry-pill">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const fills = { ...c.fills };
+                            if (e.target.checked) fills[o.target] = "";
+                            else delete fills[o.target];
+                            set(f.code, { fills });
+                          }}
+                        />
+                        {o.label}
+                        {checked && (
+                          <input
+                            className="fill-source"
+                            value={c.fills[o.target]}
+                            placeholder="from which browse column?"
+                            onClick={(e) => e.preventDefault()}
+                            onChange={(e) => set(f.code, {
+                              fills: { ...c.fills, [o.target]: e.target.value },
+                            })}
+                          />
+                        )}
+                      </label>
+                    );
+                  })}
                 </div>
+                {Object.keys(c.fills).length > 0 && (
+                  <p className="muted">
+                    Each ticked field needs the browse column that supplies it,
+                    for example testDate. It is matched against the columns QAD
+                    lists for that browse when you build.
+                  </p>
+                )}
               </>
             )}
           </Section>
