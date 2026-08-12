@@ -77,7 +77,7 @@ Two terminals. **The harness's `.claude/launch.json` resolves from `aux_web_vers
 `preview_start` will start AUX's dev server rather than this one — run these yourself:
 
 ```bash
-cd D:\WEB_AUXdaptive_java_versionackend && uvicorn main:app --reload --port 8000
+cd D:/WEB_AUX/adaptive_java_version/backend && uvicorn main:app --reload --port 8000
 ```
 
 ```bash
