@@ -46,7 +46,6 @@ ENVIRONMENT_PATH = CONFIG_DIR / "environment.json"
 
 # Keys the app needs non-empty before it can do anything against QAD.
 REQUIRED_ENV_KEYS = ("QAD_CLIENT_ID", "QAD_USERNAME", "QAD_PASSWORD")
-REQUIRED_LLM_KEYS = ("OPENAI_API_KEY",)
 
 _lock = threading.Lock()
 _caches: Dict[str, Dict[str, Any]] = {
@@ -162,6 +161,62 @@ def openai_api_key() -> str: return _secret("OPENAI_API_KEY")
 def openai_model() -> str: return _secret("OPENAI_MODEL", "gpt-4o")
 
 
+# ── LLM provider ──────────────────────────────────────────────────────────────
+# A NAME, not a pair of booleans. Two flags can both be true, which is a state
+# with no correct answer; a name cannot contradict itself.
+#
+# NVIDIA NIM speaks the OpenAI wire protocol, so switching providers is a
+# base_url and a key - not a second client.
+PROVIDERS = {
+    "openai": {
+        "base_url": None,                       # the SDK's own default
+        "key_env": "OPENAI_API_KEY",
+        "model_env": "OPENAI_MODEL",
+        "default_model": "gpt-4o",
+        "planning_model": "gpt-4o-mini",
+        "max_tokens": 15000,
+    },
+    "nvidia": {
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "key_env": "NVIDIA_API_KEY",
+        "model_env": "NVIDIA_MODEL",
+        "default_model": "meta/llama-3.3-70b-instruct",
+        # Same model for both tiers by default: NVIDIA's pricing is far flatter
+        # than OpenAI's, so a cheap-tier swap buys little and costs quality on
+        # the JSON-shaped steps.
+        "planning_model": "meta/llama-3.3-70b-instruct",
+        # Deliberately lower than OpenAI's. Most NIM models cap output far below
+        # 15k and reject the request outright rather than truncating.
+        "max_tokens": 8192,
+    },
+}
+
+
+def llm_provider() -> str:
+    name = (_secret("LLM_PROVIDER", "openai") or "openai").strip().lower()
+    if name not in PROVIDERS:
+        raise ConfigError(
+            f"LLM_PROVIDER is '{name}'. Known providers: {', '.join(sorted(PROVIDERS))}."
+        )
+    return name
+
+
+def llm_settings(role: str = "generation") -> Dict[str, Any]:
+    """Everything one model call needs: key, base_url, model, token cap."""
+    name = llm_provider()
+    p = PROVIDERS[name]
+    configured = _secret(p["model_env"], "")
+    return {
+        "provider": name,
+        "api_key": _secret(p["key_env"]),
+        "base_url": p["base_url"],
+        "model": configured or (p["planning_model"] if role == "planning"
+                                else p["default_model"]),
+        "max_tokens": p["max_tokens"],
+        "key_env": p["key_env"],
+    }
+
+
 # ── Endpoint resolution ───────────────────────────────────────────────────────
 def _all_endpoint_entries() -> Dict[str, Dict[str, Any]]:
     doc = endpoints()
@@ -250,7 +305,10 @@ def missing_required_keys() -> List[str]:
 
 
 def missing_llm_keys() -> List[str]:
-    return [k for k in REQUIRED_LLM_KEYS if not str(_secret(k) or "").strip()]
+    """Only the ACTIVE provider's key matters. Complaining about an OpenAI key
+    while running on NVIDIA would be noise."""
+    s = llm_settings()
+    return [] if str(s["api_key"] or "").strip() else [s["key_env"]]
 
 
 def public_status() -> Dict[str, Any]:
@@ -268,10 +326,11 @@ def public_status() -> Dict[str, Any]:
         "app_identity": ident,
         "identity_error": identity_error,
         "qad_username": qad_username(),
-        "openai_model": openai_model(),
+        "llm_provider": llm_provider(),
+        "llm_model": llm_settings()["model"],
         "has_qad_password": bool(qad_password().strip()),
         "has_qad_client_id": bool(qad_client_id().strip()),
-        "has_openai_key": bool(openai_api_key().strip()),
+        "has_llm_key": bool(str(llm_settings()["api_key"] or "").strip()),
         "qad_configured": not missing_required_keys(),
         "llm_configured": not missing_llm_keys(),
         "endpoint_count": len(_all_endpoint_entries()),

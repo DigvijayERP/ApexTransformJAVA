@@ -24,12 +24,9 @@ from core.logging_setup import get_logger
 
 logger = get_logger("adaptive.llm")
 
-# Per-stage tiers. A stage passes a role, not a model name, so retuning is one
-# edit here rather than a hunt through the pipeline.
-MODEL_TIERS = {
-    "planning": "gpt-4o-mini",
-    "generation": "gpt-4o",
-}
+# Model choice lives in config.PROVIDERS, per provider. A stage passes a ROLE
+# ("planning" / "generation"), never a model name, so switching providers or
+# retuning a tier is one edit there rather than a hunt through the pipeline.
 
 _stub: Optional[Callable[..., Awaitable[str]]] = None
 
@@ -67,24 +64,50 @@ async def complete(system: str, user: str, *, role: str = "generation",
 
     from openai import AsyncOpenAI
 
-    chosen = model or MODEL_TIERS.get(role) or config.openai_model()
-    client = AsyncOpenAI(api_key=config.openai_api_key())
+    s = config.llm_settings(role)
+    chosen = model or s["model"]
+    # NVIDIA NIM speaks the OpenAI protocol, so the same client serves both -
+    # only base_url and the key differ.
+    client = AsyncOpenAI(api_key=s["api_key"], base_url=s["base_url"])
+
     kwargs: Dict[str, Any] = {
         "model": chosen,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
     }
     if not chosen.startswith("gpt-5"):
-        kwargs["max_tokens"] = 15000
+        kwargs["max_tokens"] = s["max_tokens"]
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
 
-    logger.info("[LLM] %s via %s", role, chosen)
+    logger.info("[LLM] %s via %s (%s)", role, chosen, s["provider"])
     try:
         resp = await client.chat.completions.create(**kwargs)
     except Exception as exc:
-        raise LLMError(f"Model call failed: {exc}") from exc
+        # NOT every model supports response_format. OpenAI does; several NIM
+        # models reject it outright. Retry once without it rather than failing
+        # the stage - parse_json already tolerates fences and surrounding prose,
+        # and the prompts themselves demand raw JSON.
+        if json_mode and _looks_like_json_mode_rejection(exc):
+            logger.warning("[LLM] %s rejected response_format; retrying without it", chosen)
+            kwargs.pop("response_format", None)
+            kwargs["messages"][0]["content"] += (
+                "\n\nCRITICAL: reply with RAW JSON only. No markdown, no fences, "
+                "no prose before or after."
+            )
+            try:
+                resp = await client.chat.completions.create(**kwargs)
+            except Exception as exc2:
+                raise LLMError(f"Model call failed: {exc2}") from exc2
+        else:
+            raise LLMError(f"Model call failed ({s['provider']}/{chosen}): {exc}") from exc
     return resp.choices[0].message.content or ""
+
+
+def _looks_like_json_mode_rejection(exc: Exception) -> bool:
+    blob = str(exc).lower()
+    return any(t in blob for t in
+               ("response_format", "json_object", "json mode", "not supported"))
 
 
 def parse_json(raw: str) -> Any:

@@ -136,7 +136,7 @@ reports `auth_enforced: false` and says so in `warnings`.
 | # | Needed | Blocks |
 |---|---|---|
 | 1 | `QAD_PASSWORD` → `backend/.env` | Any live call. Everything else can be built and dry-run |
-| 2 | `OPENAI_API_KEY` → `backend/.env` | Stages 1, 2, 3 are LLM calls |
+| 2 | The **active provider's** LLM key → `backend/.env`. `LLM_PROVIDER=openai\|nvidia`; NVIDIA NIM is OpenAI-compatible so only the key and base URL differ. Check it with `python verify_llm.py` | Stages 1–4 only. **Stages 5–7 need no model at all** |
 | 3 | **API captures** — see [API_CAPTURES_NEEDED.md](API_CAPTURES_NEEDED.md). None block the build; they settle the lookup unknowns and upgrade free-text boxes to pickers | Live lookup writes only |
 | 4 | Confirm the Phase 1 static/dynamic classification | Settings panel shape |
 | 5 | **Q-L** — did `probe_parent_eh.py` ever run, and what did it return? | Phase 5 design |
