@@ -178,6 +178,11 @@ PROVIDERS = {
     },
     "nvidia": {
         "base_url": "https://integrate.api.nvidia.com/v1",
+        # The free tier refuses calls seconds apart, and the form stage fires
+        # three in a row. Measured: two calls 3s apart already returned 429.
+        "max_retries": 5,
+        "timeout": 180.0,
+        "rate_limit_backoff": (5, 12, 25, 40),
         "key_env": "NVIDIA_API_KEY",
         "model_env": "NVIDIA_MODEL",
         "default_model": "meta/llama-3.3-70b-instruct",
@@ -214,6 +219,12 @@ def llm_settings(role: str = "generation") -> Dict[str, Any]:
                                 else p["default_model"]),
         "max_tokens": p["max_tokens"],
         "key_env": p["key_env"],
+        "max_retries": p.get("max_retries", 2),
+        "timeout": p.get("timeout", 120.0),
+        # Seconds to wait between 429 retries. NVIDIA's free tier refuses calls
+        # seconds apart, and its window is longer than the SDK's sub-second
+        # backoff, so these are deliberately generous.
+        "rate_limit_backoff": p.get("rate_limit_backoff", (2, 5, 10)),
     }
 
 

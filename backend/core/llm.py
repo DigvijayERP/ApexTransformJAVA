@@ -68,7 +68,13 @@ async def complete(system: str, user: str, *, role: str = "generation",
     chosen = model or s["model"]
     # NVIDIA NIM speaks the OpenAI protocol, so the same client serves both -
     # only base_url and the key differ.
-    client = AsyncOpenAI(api_key=s["api_key"], base_url=s["base_url"])
+    #
+    # max_retries is raised well above the SDK's default of 2. A free NIM tier
+    # rate-limits on calls seconds apart, and the form stage alone fires three
+    # in a row; the SDK's sub-second backoff gives up long before the window
+    # reopens. Losing a stage to a 429 costs the user a whole gate.
+    client = AsyncOpenAI(api_key=s["api_key"], base_url=s["base_url"],
+                         max_retries=s["max_retries"], timeout=s["timeout"])
 
     kwargs: Dict[str, Any] = {
         "model": chosen,
@@ -82,7 +88,7 @@ async def complete(system: str, user: str, *, role: str = "generation",
 
     logger.info("[LLM] %s via %s (%s)", role, chosen, s["provider"])
     try:
-        resp = await client.chat.completions.create(**kwargs)
+        resp = await _with_rate_limit_retry(client, kwargs, s)
     except Exception as exc:
         # NOT every model supports response_format. OpenAI does; several NIM
         # models reject it outright. Retry once without it rather than failing
@@ -102,6 +108,45 @@ async def complete(system: str, user: str, *, role: str = "generation",
         else:
             raise LLMError(f"Model call failed ({s['provider']}/{chosen}): {exc}") from exc
     return resp.choices[0].message.content or ""
+
+
+async def _with_rate_limit_retry(client: Any, kwargs: Dict[str, Any],
+                                 settings: Dict[str, Any]) -> Any:
+    """Retry a 429 with real backoff, on top of the SDK's own retries.
+
+    Free NIM tiers answer one call and refuse the next a few seconds later. The
+    SDK backs off in fractions of a second and gives up; the window is longer
+    than that. Waiting is cheap here because a gated run is already paced by a
+    human, and losing the stage is not.
+    """
+    import asyncio
+
+    delays = settings["rate_limit_backoff"]
+    last: Exception | None = None
+    for attempt, wait in enumerate([0.0, *delays]):
+        if wait:
+            logger.warning("[LLM] rate limited; waiting %.0fs before retry %d/%d",
+                           wait, attempt, len(delays))
+            await asyncio.sleep(wait)
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if not _is_rate_limit(exc):
+                raise
+            last = exc
+    raise LLMError(
+        f"Rate limited after {len(delays)} retries over "
+        f"{int(sum(delays))}s. The provider's free tier allows very few calls "
+        f"per minute; wait a moment and re-run this stage, or switch "
+        f"LLM_PROVIDER. Nothing was written to QAD. ({last})"
+    )
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    if getattr(exc, "status_code", None) == 429:
+        return True
+    blob = str(exc).lower()
+    return "429" in blob or "too many requests" in blob or "rate limit" in blob
 
 
 def _looks_like_json_mode_rejection(exc: Exception) -> bool:
