@@ -129,7 +129,7 @@ def build_form_payload(placements: List[Dict[str, Any]], spec: Dict[str, Any],
                if str(f["code"]).strip().lower() not in placed]
     if missing:
         raise ValueError(
-            f"Form layout is incomplete — {len(missing)} of {len(spec_fields)} field(s) "
+            f"Form layout is incomplete: {len(missing)} of {len(spec_fields)} field(s) "
             f"are not placed on any panel: {', '.join(missing)}. A required field that is "
             f"missing from the layout makes the record impossible to save in QAD."
         )

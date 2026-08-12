@@ -128,8 +128,8 @@ def validate_spec(spec: Dict[str, Any]) -> List[str]:
         problems.append("The BC needs a name (bc_pascal).")
     elif not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", spec["bc_pascal"]):
         problems.append(
-            f"BC name '{spec['bc_pascal']}' must be alphanumeric and start with a letter "
-            f"— QAD builds urns and a table name from it."
+            f"BC name '{spec['bc_pascal']}' must be alphanumeric and start with a letter. "
+            f"QAD builds urns and a table name from it."
         )
 
     fields = spec.get("fields") or []

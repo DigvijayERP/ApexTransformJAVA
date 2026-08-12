@@ -42,7 +42,7 @@ function FieldSpec({ a }: { a: Bag }) {
 
   return (
     <>
-      <Section title={`${a.bc_pascal} — ${fields.length} field${fields.length === 1 ? "" : "s"}`}>
+      <Section title={`${a.bc_pascal}: ${fields.length} field${fields.length === 1 ? "" : "s"}`}>
         <table className="grid">
           <thead>
             <tr><th>Field</th><th>Type</th><th>Key</th><th>Required</th><th>Lookup</th><th>Values</th></tr>
@@ -56,7 +56,7 @@ function FieldSpec({ a }: { a: Bag }) {
                     <code>{f.code}</code>
                     {/* A SQL reserved word becomes a differently-named QAD
                         column. Silent renaming is what a gate exists to catch. */}
-                    {safe && <span className="rename" title="renamed — SQL reserved word">→ {safe}</span>}
+                    {safe && <span className="rename" title="renamed, SQL reserved word">→ {safe}</span>}
                   </td>
                   <td>{f.dataType}{f.maxLength ? ` (${f.maxLength})` : ""}</td>
                   <td>{f.isPrimary ? "PK" : ""}</td>
@@ -84,7 +84,7 @@ function FormLayout({ a }: { a: Bag }) {
     <>
       {a.plan && <Section title="Panel plan"><pre className="prose">{a.plan}</pre></Section>}
       {panels.map((p) => (
-        <Section key={p.panel} title={`Panel ${p.panel} — ${p.panelName}`}>
+        <Section key={p.panel} title={`Panel ${p.panel}: ${p.panelName}`}>
           <table className="grid">
             <thead><tr><th>Field</th><th>Column</th><th>Row</th></tr></thead>
             <tbody>
@@ -115,7 +115,7 @@ function HandlerCode({ a, onBrowseUris }: { a: Bag; onBrowseUris?: (v: Record<st
       {placeholders.length > 0 && (
         <Section title="Browse URIs this handler needs">
           <p className="muted">
-            Leave one blank and that line is commented out with a TODO — the same
+            Leave one blank and that line is commented out with a TODO, the same
             fallback AUX always takes. Fill it in and the call works.
           </p>
           {placeholders.map((p) => (
@@ -213,7 +213,7 @@ function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => vo
         return (
           <Section key={f.code} title={f.label ?? f.code}>
             <label className="field">
-              <span>Browse URI — which records to choose from</span>
+              <span>Browse URI (which records to choose from)</span>
               <input
                 value={c.uri}
                 placeholder="urn:browse:bebrowse:com.yash.digwish.digsmoketest"
@@ -222,7 +222,7 @@ function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => vo
             </label>
 
             <label className="field">
-              <span>Field on that browse — the value returned</span>
+              <span>Field on that browse (the value returned)</span>
               <input
                 value={c.field}
                 placeholder="testCode"
@@ -302,7 +302,7 @@ function DeployPreview({ a }: { a: Bag }) {
       </Section>
       <Section title="QAD's deployment warnings">
         {warn.dry_run
-          ? <Empty>Dry run — the warnings check was rehearsed, not sent.</Empty>
+          ? <Empty>Dry run. The warnings check was rehearsed, not sent.</Empty>
           : <Payload value={warn.data ?? warn} label="Warnings response" />}
       </Section>
       <Payload value={a.payload_preview} label="Exact deploy payload" />
@@ -331,7 +331,7 @@ export function Artifact({ kind, artifact, onBrowseUris, onConfigure }: {
       // is being asked to make.
       return (
         <>
-          <Empty>No renderer for “{kind ?? "unknown"}” — showing it raw.</Empty>
+          <Empty>No renderer for “{kind ?? "unknown"}”. Showing it raw.</Empty>
           <pre className="code">{JSON.stringify(artifact, null, 2)}</pre>
         </>
       );

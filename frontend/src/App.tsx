@@ -38,7 +38,7 @@ function Start() {
       </h2>
       <p className="hero-sub">
         Describe the business component you need, or paste Progress 4GL source.
-        Every stage pauses and shows you exactly what it produced — nothing
+        Every stage pauses and shows you exactly what it produced. Nothing
         reaches QAD without your approval.
       </p>
 
@@ -55,7 +55,7 @@ function Start() {
         <div className="composer-foot">
           <label className={`dry-pill ${dryRun ? "on" : "off"}`} title="Dry run builds and shows every payload but sends nothing to QAD.">
             <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
-            {dryRun ? "Dry run — sends nothing" : "LIVE — writes to QAD on approval"}
+            {dryRun ? "Dry run: sends nothing" : "LIVE: writes to QAD on approval"}
           </label>
           <span className="spacer" />
           {/* Naming the mode on the button itself. A round arrow says nothing
@@ -63,7 +63,7 @@ function Start() {
               resets on every New run. */}
           <button className={`start-btn ${dryRun ? "" : "live"}`}
                   disabled={!canSend} onClick={send}>
-            {working ? "Starting…" : dryRun ? "Start rehearsal" : "Start — writes to QAD"}
+            {working ? "Starting…" : dryRun ? "Start rehearsal" : "Start and write to QAD"}
           </button>
         </div>
       </div>
@@ -104,7 +104,7 @@ function RunMode() {
     return (
       <div className="banner mode-dry">
         <p>
-          <strong>{done ? "REHEARSAL COMPLETE — nothing was created in QAD." : "DRY RUN — nothing is being sent to QAD."}</strong>{" "}
+          <strong>{done ? "Rehearsal complete. Nothing was created in QAD." : "Dry run: nothing is being sent to QAD."}</strong>{" "}
           {done
             ? "Every payload below was built and checked but never sent. To create this for real, start a new run and switch the dry-run pill off first."
             : "Every payload is built and shown exactly as it would be sent, then discarded."}
@@ -116,7 +116,7 @@ function RunMode() {
   return (
     <div className={`banner mode-live${done ? " done" : ""}`}>
       <p>
-        <strong>{done ? "CREATED IN QAD." : "LIVE — approving a stage writes to QAD."}</strong>{" "}
+        <strong>{done ? "Created in QAD." : "Live: approving a stage writes to QAD."}</strong>{" "}
         {done
           ? `${run.bc_pascal} was deployed. Verify it by opening the view in QAD and saving a record.`
           : "QAD has no undo, so each gate shows the exact payload before it is sent."}

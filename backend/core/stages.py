@@ -152,7 +152,7 @@ STAGES: List[Stage] = [
         number=5,
         label="View creation",
         description=(
-            "Build and register the browse/maintain/hybrid view. Deterministic — "
+            "Build and register the browse/maintain/hybrid view. Deterministic, "
             "derived entirely from the approved field spec with no LLM call, so "
             "there is no generated content to review."
         ),
@@ -168,8 +168,8 @@ STAGES: List[Stage] = [
         description=(
             "Create a QAD Lookup Definition for each field marked as needing one at "
             "the field stage. When the lookup points at a business component we "
-            "created, the browse URI and the result/search fields are derived — "
-            "nothing to type. Pointing at a standard QAD component needs its Browse "
+            "created, the browse URI and the result/search fields are derived. "
+            "Nothing to type. Pointing at a standard QAD component needs its Browse "
             "URI, which you supply here. Optionally choose other form fields to "
             "auto-populate when a value is picked."
         ),
@@ -187,7 +187,7 @@ STAGES: List[Stage] = [
         label="Deploy",
         description=(
             "Show QAD's deployment warnings and the exact deploy payloads, then "
-            "deploy on approval. Terminal — nothing can be regenerated afterwards."
+            "deploy on approval. Terminal. Nothing can be regenerated afterwards."
         ),
         gated=True,
         writes=["deploy.check_warnings", "deploy.business_entity"],

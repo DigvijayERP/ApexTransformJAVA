@@ -105,7 +105,7 @@ async def stage_requirements(ctx: Dict[str, Any], instruction: str = "") -> Stag
 
     user = ctx["user_input"]
     if instruction:
-        user = f"{user}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
+        user = f"{user}\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
 
     text = await llm.complete(prompts.render(prompts.REQUIREMENTS_GATHERING),
                               user, role="planning")
@@ -142,7 +142,7 @@ async def stage_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResul
     requirements = _need(ctx, "requirements", "text")
     user = requirements
     if instruction:
-        user = f"{requirements}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
+        user = f"{requirements}\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
 
     parsed = llm.parse_json(
         await llm.complete(prompts.render(prompts.FIELD_CREATOR), user,
@@ -229,7 +229,7 @@ async def stage_form(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
                               _json.dumps(spec["fields"]), role="planning")
     user = plan
     if instruction:
-        user = f"{plan}\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
+        user = f"{plan}\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
 
     placements = _placements_from(
         llm.parse_json(await llm.complete(prompts.render(prompts.FORM_FIELD_BUILDER),
@@ -350,7 +350,7 @@ async def stage_handler(ctx: Dict[str, Any], instruction: str = "",
     user = (f"BC Name: {bc}\n\nEvent Handler Plan:\n{plan}\n\n"
             f"Field placements:\n{_json.dumps(placements)}")
     if instruction:
-        user += f"\n\nCORRECTION FROM THE USER — apply this:\n{instruction}"
+        user += f"\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
 
     ts_raw = ehb.strip_fences(await llm.complete(
         prompts.render(prompts.TS_CODE_WRITER, docs_context=docs),

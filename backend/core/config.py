@@ -147,7 +147,7 @@ def app_identity() -> Dict[str, str]:
     if missing:
         raise ConfigError(
             f"config/environment.json: app_identity is missing {', '.join(missing)}. "
-            f"These cannot be defaulted — app_name must match QAD's app list and "
+            f"These cannot be defaulted: app_name must match QAD's app list and "
             f"datastore_uri is environment-specific."
         )
     return {k: str(v) for k, v in ident.items()}

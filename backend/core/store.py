@@ -120,7 +120,7 @@ async def init_db(db_path: Optional[Path] = None) -> None:
                 dry_run      INTEGER NOT NULL,
                 ok           INTEGER NOT NULL,
                 -- Does this call lock regeneration? Only calls made by a
-                -- stage's commit — i.e. by an APPROVAL — do. A stage may also
+                -- stage's commit, i.e. by an APPROVAL. A stage may also
                 -- call QAD while merely RENDERING its gate: the deploy stage
                 -- runs deployCheckForWarnings so the dialog can show what QAD
                 -- said. Those must be audited but must NOT lock, or simply
@@ -403,7 +403,7 @@ async def can_regenerate(run_id: str, stage_id: str,
             )
         return False, (
             f"{detail} ({write['endpoint_id']}). Regenerating would re-run that write, and "
-            f"QAD has no undo — a second create fails on the existing record. "
+            f"QAD has no undo, and a second create fails on the existing record. "
             f"Start a new run with a different Business Component name, or delete it in QAD "
             f"first and re-run."
         )

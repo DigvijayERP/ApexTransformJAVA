@@ -127,7 +127,7 @@ async def get_token(force: bool = False) -> str:
     missing = config.missing_required_keys()
     if missing:
         raise RuntimeError(
-            "Cannot authenticate to QAD — missing " + ", ".join(missing) +
+            "Cannot authenticate to QAD, missing " + ", ".join(missing) +
             ". Set them in backend/.env."
         )
 
@@ -152,7 +152,7 @@ async def refresh_token() -> str:
             _tokens.store(await _post_token(url))
             return _tokens.access_token
         except Exception as exc:
-            logger.warning("[AUTH] refresh failed (%s) — falling back to full login", exc)
+            logger.warning("[AUTH] refresh failed (%s), falling back to full login", exc)
     _tokens.clear()
     return await get_token(force=True)
 
@@ -259,14 +259,14 @@ async def call(
 
     # One refresh-and-retry on 401, matching the confirmed plugin behaviour.
     if result.status_code == 401:
-        logger.info("[AUTH] 401 on %s — refreshing and retrying once", endpoint_id)
+        logger.info("[AUTH] 401 on %s, refreshing and retrying once", endpoint_id)
         token = await refresh_token()
         result = await _execute(verb, url, token, payload, timeout)
 
     if result.status_code == 403:
         result.error = (
             f"QAD refused the request (HTTP 403) on '{endpoint_id}'. This is a "
-            f"permissions failure, not an expired session — the user "
+            f"permissions failure, not an expired session. The user "
             f"'{config.qad_username()}' may lack rights on this app."
         )
 

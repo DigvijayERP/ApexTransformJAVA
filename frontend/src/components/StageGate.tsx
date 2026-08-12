@@ -30,7 +30,7 @@ export function StageGate() {
         {meta.writes.length > 0 && (
           <p className="writes-note">
             Approving sends {meta.writes.length} call{meta.writes.length === 1 ? "" : "s"} to QAD
-            {runRow?.dry_run && <strong> — dry run, nothing will actually be sent</strong>}.
+            {runRow?.dry_run && <strong> (dry run, nothing will actually be sent)</strong>}.
           </p>
         )}
       </header>
@@ -43,7 +43,7 @@ export function StageGate() {
           </button>
         </div>
       ) : gate.skipped ? (
-        <div className="empty"><p className="muted">Skipped — {gate.reason}</p></div>
+        <div className="empty"><p className="muted">Skipped: {gate.reason}</p></div>
       ) : (
         <>
           {(gate.warnings ?? []).map((w, i) => (
@@ -71,8 +71,8 @@ export function StageGate() {
                       onClick={() => approve(activeStage)}>
                 {working ? "Working…"
                   : !meta.writes.length ? "Approve"
-                  : runRow?.dry_run ? "Approve — rehearse only, sends nothing"
-                  : "Approve and SEND to QAD"}
+                  : runRow?.dry_run ? "Approve (rehearse only, sends nothing)"
+                  : "Approve and send to QAD"}
               </button>
 
               {meta.conditional_on && (
