@@ -682,6 +682,32 @@ Three fixes landed:
 
 Both suites pass. The backend must be restarted to pick these up before re-running the Lookups gate.
 
+### The red boxes on the DigOrderTest screen, traced to their sources (2026-08-12)
+
+The owner saw four validation errors while entering an order and asked what was misconfigured.
+Traced each to its origin rather than guessing:
+
+- **"Order Code / Order Date / Quantity is required"** — our own configuration, working. The field
+  stage sent `isRequired: true` on those fields (bc.metadata.write payload, verified in the store).
+  They fire when Save runs with fields still empty. Status stays quiet because its dropdown defaults
+  to Open. Not a fault.
+- **"Unable to resolve Customer Reference"** — reference validation running against DigSmokeTest.
+  Verified live: DigSmokeTest holds exactly one record, `testCode='dush'`, so the typed value is
+  valid and the later save resolved it (only "Quantity is required" remained). The first save fired
+  every validation at once before the typed value had been resolved. Not a fault.
+- **The magnifier on Customer Reference comes from our FORM**: the customerRef auto field carries
+  `lookupVisibility: "Visible"` in the form.save payload. The working picker contents, however,
+  cannot have come from this app: run 007799a95dfc is `failed` at lookups and its only lookup.create
+  was the 571 rejection. A Lookup Definition tab was open in the owner's browser; the definition was
+  presumably created there by hand. [INFERRED — GET /lookups returns count 0 under both the V1 and
+  V2 viewUri, so the list could not be read to confirm; that GET may simply not be a list endpoint.]
+- **Named risk**: "Order Date is required" is NOT "order date cannot be in the past". The handler
+  stage was skipped after the NVIDIA 503, so the quantity>0 and no-past-date rules DO NOT exist on
+  this BC. A past date or negative quantity will save today.
+
+Also noted: no deploy.business_entity was ever sent for DigOrderTest by this app, yet the screen is
+live and saving records — the owner presumably deployed manually, same as the lookup.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |
