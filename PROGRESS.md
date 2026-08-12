@@ -696,17 +696,34 @@ Traced each to its origin rather than guessing:
   valid and the later save resolved it (only "Quantity is required" remained). The first save fired
   every validation at once before the typed value had been resolved. Not a fault.
 - **The magnifier on Customer Reference comes from our FORM**: the customerRef auto field carries
-  `lookupVisibility: "Visible"` in the form.save payload. The working picker contents, however,
-  cannot have come from this app: run 007799a95dfc is `failed` at lookups and its only lookup.create
-  was the 571 rejection. A Lookup Definition tab was open in the owner's browser; the definition was
-  presumably created there by hand. [INFERRED — GET /lookups returns count 0 under both the V1 and
-  V2 viewUri, so the list could not be read to confirm; that GET may simply not be a list endpoint.]
-- **Named risk**: "Order Date is required" is NOT "order date cannot be in the past". The handler
-  stage was skipped after the NVIDIA 503, so the quantity>0 and no-past-date rules DO NOT exist on
-  this BC. A past date or negative quantity will save today.
+  `lookupVisibility: "Visible"` in the form.save payload.
+- ~~The working picker was presumably created by hand in the Lookup Definition screen, and the BC
+  deployed manually~~ **WRONG, corrected same day** — see the next section. The screen in the
+  owner's screenshots was `DigOrderTesting`, a NEW run through the fixed backend, not the failed
+  `DigOrderTest`. Two near-identical BC names, one wrong conclusion. The GET /lookups list
+  returning count 0 was itself misleading: a definition provably existed at probe time, so that
+  GET is not a usable list endpoint.
 
-Also noted: no deploy.business_entity was ever sent for DigOrderTest by this app, yet the screen is
-live and saving records — the owner presumably deployed manually, same as the lookup.
+### 🎉 FIRST FULLY-LIVE 7-STAGE RUN — the lookup fix is validated (2026-08-12)
+
+OpenAI credits returned; the owner switched `LLM_PROVIDER=openai` and ran `DigOrderTesting`
+end to end on the fixed backend (run `a6a9270c9698`). Every write live and accepted — nine calls:
+bc.create, metadata read+write, form.save, **eventhandler.register**, view.register,
+**lookup.create**, deploy check_warnings, deploy.business_entity. The owner iterated the handler
+four times at the gate before approving attempt 5, which is exactly what the gate is for.
+
+The successful lookup payload settles the case question for good:
+
+- `resultField`/`searchField` went out as `digSmokeTest.testCode` — camelCase, resolved by the
+  repaired picker. Every failed attempt had sent `digsmoketest.testCode`.
+- `lookupResultFields` was `[]` (no fill configured), so the element VALUE formats are still
+  unverified — the renamed keys have not yet been exercised by a successful fill-carrying save.
+  That stays a named deferral.
+- The registered handler means the quantity>0 / no-past-date rules exist on THIS BC, unlike
+  `DigOrderTest` where the stage was skipped. Enforcement not yet witnessed on an actual save.
+
+Leftovers in QAD from failed runs: `DigOrderTest`, `DigLookupTest`, `DigLookupTest2` exist as
+undeployed BCs. Harmless; manual cleanup in QAD whenever convenient.
 
 ## Deferrals — named, not silently dropped (working rule 6)
 
