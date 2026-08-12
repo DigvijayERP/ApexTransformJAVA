@@ -725,6 +725,28 @@ The successful lookup payload settles the case question for good:
 Leftovers in QAD from failed runs: `DigOrderTest`, `DigLookupTest`, `DigLookupTest2` exist as
 undeployed BCs. Harmless; manual cleanup in QAD whenever convenient.
 
+### Case 2 (Embedded BC) discovery complete — PHASE3_CASE2_DISCOVERY.md (2026-08-12)
+
+Owner declared Case 2 (embedded BC creation) the next milestone. A 9-agent parallel audit swept
+AUX's `pipeline_embedded.py`, `embedded_builder.py`, the three parsers, `client_extensions.py`,
+`qad_entity_registry.py`, `probe_parent_eh.py`, the embedded prompts, the AUX frontend flow, the
+class 3/6/7 training guides, and PHASE0_AUDIT's prior findings — 343 cited facts, classified into
+**20 portable / 16 stale / 18 unknown**, with 6 reader contradictions named (2 resolved same day).
+
+Headlines, full detail in `PHASE3_CASE2_DISCOVERY.md` (+ raw data `CASE2_DISCOVERY_DATA.json`):
+
+- Case 2 is SMALLER than Case 1 on the wire: child BC + one BERelation + deploy. No form, view,
+  handler, or lookups for the child; the parent form grows the grid automatically.
+- **One genuinely new endpoint**: the BERelation POST. Its new-env path/payload is the single
+  blocking unknown — settled by one Network-tab capture of a Relationship save.
+- The PK trio discipline (domaincodeEx + parent FK + child PK) is platform law, not AUX habit —
+  the prompts encode QAD's own rule and port nearly verbatim (zero hardcoded identity in them).
+- AUX's 5 builtin parent-registry rows were hand-typed against the old env and never validated —
+  re-capture from eeadaptive, never copy.
+- AUX's embedded UX had zero gates and an LLM-guessed parent; the suggested Case 2 pipeline is
+  7 gated core stages mirroring Case 1, with the standalone-view step (contradicts docs, never
+  provably exercised) conditional and parent-event-handler work deferred to its own case.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |
