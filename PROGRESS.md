@@ -629,6 +629,25 @@ rather than data about the lookup.
 capture, so its element shape `{field, target}` still comes from class 4 p.13's screenshot rather than
 the wire.
 
+### NVIDIA NIM works, but the free tier is slow (2026-08-12)
+
+Owner's OpenAI credits ran out, so NVIDIA NIM was added behind `LLM_PROVIDER`. Measured on the free key:
+
+| Model | Result |
+|---|---|
+| `minimaxai/minimax-m3` | **unusable.** Answers once, then 429s indefinitely. Never cleared, even after 82s of backoff |
+| `meta/llama-3.3-70b-instruct` | **works** — but two calls took **four minutes**, succeeding only because the retry ladder waited it out |
+
+A full 7-stage run makes **8 model calls** (requirements 1, fields 1, form 3, handler 3). At free-tier
+pacing that is minutes per stage, not seconds. It is genuinely usable for correctness testing, which is
+what it is for; it is not something to demo on.
+
+`.env` switched to the working model. The rate-limit ladder (5/12/25/40s, on top of the SDK's own
+retries) is per-provider, so OpenAI keeps the SDK defaults rather than inheriting a free-tier tuning.
+
+**Stages 5, 6 and 7 make no model calls at all**, so a lookup or deploy test needs no key and no
+waiting. That is how the lookup fix can be tested while credits are out.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |
