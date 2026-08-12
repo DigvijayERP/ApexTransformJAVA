@@ -81,7 +81,7 @@ cd D:/WEB_AUX/adaptive_java_version/backend && uvicorn main:app --reload --port 
 ```
 
 ```bash
-cd D:\WEB_AUXdaptive_java_versionrontend && npm install && npm run dev
+cd D:/WEB_AUX/adaptive_java_version/frontend && npm install && npm run dev
 ```
 
 Then open http://localhost:5173. Vite proxies `/api` to port 8000.
