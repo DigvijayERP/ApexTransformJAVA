@@ -747,6 +747,26 @@ Headlines, full detail in `PHASE3_CASE2_DISCOVERY.md` (+ raw data `CASE2_DISCOVE
   7 gated core stages mirroring Case 1, with the standalone-view step (contradicts docs, never
   provably exercised) conditional and parent-event-handler work deferred to its own case.
 
+### 🔴 Case 2 captures landed same day — 5 of 18 unknowns settled, registry probed live (2026-08-12)
+
+The owner hand-built `EmbeddedExmpl2` (embedded under Items) in the eeadaptive UI and captured all
+four wire calls: entity save, berelation save, and two deployBusinessEntity calls. Verbatim record
+and analysis: `captures/2026-08-12_embedded_EmbeddedExmpl2.md`. U1/U2/U3/U6 settled, U7 partial,
+the C3 flags contradiction resolved; `relation.create` in the endpoint registry upgraded to
+status "captured".
+
+Then a read-only live probe of AUX's five parent URNs settled U5 with two corrections AUX could
+never have revealed: **InventoryMaster is doNotExtend on this environment** (must not be offered
+as a parent), and **WorkOrderMaster has three PKs**, so the parent registry must model the full
+PK-mapping list rather than AUX's single fk_field (the captured relation maps EVERY parent PK).
+
+Biggest conceptual finds: the domain PK field's NAME is user-chosen (only the role is fixed);
+relationID is any client UUID; no percent-encoded URI scheme and no modelId sequence exist on the
+new environment. AUX's most intricate embedded-builder code was reproducing old-env cargo.
+
+Remaining before build start: owner confirms the embedded grid is visible on the Items screen
+(settles U4/U9/U10), plus the scope calls on step 8, .p input, and duplicate fast-fail.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

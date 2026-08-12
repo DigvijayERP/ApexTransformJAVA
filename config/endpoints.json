@@ -236,10 +236,10 @@
           "query": {
             "viewUri": "urn:be:com.qad.qra.berelation.IBERelation"
           },
-          "notes": "The step that makes it embedded. cardinality MANYTOONE; AUX uses a hardcoded UUID prefix for relationID. The grid is STRUCTURAL for MANYTOONE \u2014 a panel would need a ONETOONE redesign.",
+          "notes": "The step that makes it embedded. CAPTURED FROM THE NEW ENV UI 2026-08-12 (captures/2026-08-12_embedded_EmbeddedExmpl2.md): cardinality MANYTOONE is client-sent; relationID is a plain client-generated UUID (AUX's magic prefix is NOT load-bearing) echoed in uri as urn:be:com.qad.qra.berelation.IBERelation:<relationID>; BERelationFields must map EVERY parent PK (sourceFieldCode/relatedFieldCode pairs incl. domain field to DomainCode); isEmbedded false, isIncludeOnParent false, isExtension true, isUseInBusinessDocument true, isCascadeDeleteForBD true. The grid is STRUCTURAL for MANYTOONE - a panel would need a ONETOONE redesign.",
           "classification": "static",
-          "source": "aux_web_version/backend/pipeline_embedded.py:277",
-          "status": "confirmed"
+          "source": "captures/2026-08-12_embedded_EmbeddedExmpl2.md (was: aux_web_version/backend/pipeline_embedded.py:277)",
+          "status": "captured"
         }
       ]
     },

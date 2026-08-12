@@ -286,14 +286,34 @@ regeneration free until a live write lands.
 
 ## Next actions, in dependency order
 
-**Captures the owner must provide (browser Network tab on eeadaptive, same method as the lookup
-Save capture):**
-1. A Relationship save (child BC screen > Relationships > New > Save) — settles U1, U2, U3, and
-   the C3 flags contradiction. This is the ONE new endpoint Case 2 adds over Case 1.
-2. An Entity Builder save with the Embedded checkbox checked — settles U6 (URI scheme, modelId
-   sequence) and U7 (the 'xx' physical-table prefix).
-3. Parent entity metadata reads for whichever parents Case 2 should support — settles U5 and
-   seeds Adaptive's registry with new-env truth instead of AUX's hand-typed rows.
+### UPDATE 2026-08-12, same day: the captures LANDED and the registry was probed live
+
+The owner hand-created `EmbeddedExmpl2` (embedded under Items) in the eeadaptive UI and captured
+the entity save, the berelation save, and both deploy calls — verbatim record and full analysis
+in `captures/2026-08-12_embedded_EmbeddedExmpl2.md`. Combined with a read-only live probe of the
+five AUX parent URNs, the unknowns table moves as follows:
+
+- **U1, U2, U3, U6 SETTLED; U7 partial; C3 flags contradiction RESOLVED** — see the capture file.
+  Highlights: relationID is a plain client UUID (AUX's magic prefix is cargo), cardinality is
+  client-sent, NO percent-encoded URI scheme and NO modelId sequence exist on the new env, and
+  the domain PK field's NAME is user-chosen (`DomainCodee` worked) — only its role is fixed.
+- **U5 SETTLED by live probe.** All five AUX parent URNs are valid on eeadaptive, all
+  isQadStandard, domain field is `DomainCode` on every one. But two corrections to AUX's rows:
+  **InventoryMaster is `doNotExtend: true` on this environment — it cannot be a parent and must
+  not be offered.** And **WorkOrderMaster has THREE PKs** (DomainCode, WorkOrderNumber,
+  WorkOrderID): since the captured relation maps EVERY parent PK, AUX's single-fk_field model
+  under-maps it. The registry schema needs pk_fields-to-map as a LIST, not one fk_field.
+  Live-read PK truth: SalesOrderHeaders(DomainCode, SalesOrderNumber),
+  PurchaseOrderHeaders(DomainCode, PurchaseOrderNumber), Items(DomainCode, ItemCode),
+  WorkOrderMasters(DomainCode, WorkOrderNumber, WorkOrderID). Note live entityCodes also differ
+  from AUX's keys: `Items`, `WorkOrderMasters`, `InventoryMasters`.
+- **U4/U9/U10 remain** but are now one observation away: EmbeddedExmpl2 is deployed — the owner
+  opening the Items screen and confirming the embedded grid/tab settles them.
+
+**Captures originally requested (now delivered):**
+1. ~~A Relationship save~~ **DONE** — settles U1, U2, U3, C3.
+2. ~~An Entity Builder save with the Embedded checkbox~~ **DONE** — settles U6, U7 partial.
+3. ~~Parent entity metadata reads~~ **DONE via live probe** — settles U5.
 
 **Owner questions (carried from Phase 0, now blocking different things):**
 - Q-L: did `probe_parent_eh.py` ever run? (Blocks only Stage 9 / parent-EH work, NOT core Case 2.)
