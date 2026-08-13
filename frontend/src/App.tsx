@@ -1,14 +1,20 @@
 import { useState } from "react";
-import { token } from "./api";
+import { token, type RunMode as Mode } from "./api";
 import { useRun } from "./RunContext";
 import { Payload } from "./components/Artifact";
 import { StageGate } from "./components/StageGate";
 import { StageRail } from "./components/StageRail";
 
-const EXAMPLE_PROMPTS = [
-  "Create a Dealer Order Header BC with fields: dealer code, PO number, order date, due date, total amount, and status.",
-  "Create a Vendor Master BC with vendor code (PK), vendor name, country, payment terms, and active flag.",
-];
+const EXAMPLE_PROMPTS: Record<Mode, string[]> = {
+  standard: [
+    "Create a Dealer Order Header BC with fields: dealer code, PO number, order date, due date, total amount, and status.",
+    "Create a Vendor Master BC with vendor code (PK), vendor name, country, payment terms, and active flag.",
+  ],
+  embedded: [
+    "Extend Items with shipping details: a handling class, a customs code, and a hazard flag.",
+    "Add order notes to Sales Order Headers: a sequence number per note, the note text, and an author.",
+  ],
+};
 
 function Health() {
   const { state } = useRun();
@@ -25,11 +31,12 @@ function Start() {
   const { state, start } = useRun();
   const [prompt, setPrompt] = useState("");
   const [dryRun, setDryRun] = useState(true);
+  const [mode, setMode] = useState<Mode>("standard");
   const [tok, setTok] = useState(token.get());
   const working = state.busy !== null;
   const canSend = !working && prompt.trim().length > 0;
 
-  const send = () => canSend && start(prompt, dryRun);
+  const send = () => canSend && start(prompt, dryRun, mode);
 
   return (
     <section className="start">
@@ -42,11 +49,28 @@ function Start() {
         reaches QAD without your approval.
       </p>
 
+      {/* The mode changes the stage list, so it is chosen up front, not
+          inferred from the prompt. The rail then renders that mode's manifest. */}
+      <div className="mode-toggle" role="tablist" aria-label="Run mode">
+        <button role="tab" aria-selected={mode === "standard"}
+                className={`mode-tab ${mode === "standard" ? "on" : ""}`}
+                onClick={() => setMode("standard")}>
+          Standalone BC
+        </button>
+        <button role="tab" aria-selected={mode === "embedded"}
+                className={`mode-tab ${mode === "embedded" ? "on" : ""}`}
+                onClick={() => setMode("embedded")}>
+          Embedded BC (extends a parent)
+        </button>
+      </div>
+
       <div className="composer">
         <textarea
           rows={3}
           value={prompt}
-          placeholder="e.g. a training room BC with a class name, location, start and end dates…"
+          placeholder={mode === "embedded"
+            ? "e.g. extend Items with shipping details: a handling class and a customs code…"
+            : "e.g. a training room BC with a class name, location, start and end dates…"}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -69,7 +93,7 @@ function Start() {
       </div>
 
       <div className="example-prompts">
-        {EXAMPLE_PROMPTS.map((p) => (
+        {EXAMPLE_PROMPTS[mode].map((p) => (
           <button key={p} className="example-prompt" onClick={() => setPrompt(p)}>
             {p}
           </button>
@@ -118,7 +142,9 @@ function RunMode() {
       <p>
         <strong>{done ? "Created in QAD." : "Live: approving a stage writes to QAD."}</strong>{" "}
         {done
-          ? `${run.bc_pascal} was deployed. Verify it by opening the view in QAD and saving a record.`
+          ? run.mode === "embedded"
+            ? `${run.bc_pascal} was deployed as an embedded extension. Open the parent component's screen in QAD and refresh: the extension grid and tab appear there.`
+            : `${run.bc_pascal} was deployed. Verify it by opening the view in QAD and saving a record.`
           : "QAD has no undo, so each gate shows the exact payload before it is sent."}
       </p>
     </div>
@@ -163,6 +189,7 @@ export default function App() {
         {started && (
           <div className="run-meta">
             <span>{state.run?.bc_pascal ?? "unnamed"}</span>
+            {state.run?.mode === "embedded" && <em className="tag">embedded</em>}
             <em className={`tag ${state.run?.dry_run ? "" : "write"}`}>
               {state.run?.dry_run ? "dry run" : "live"}
             </em>

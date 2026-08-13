@@ -1,0 +1,83 @@
+{
+  "comment": [
+    "Candidate parent entities for Case 2 (embedded BC). Seeded from a LIVE read of",
+    "eeadaptive on 2026-08-12 (PROGRESS.md, 'Case 2 captures landed'), NOT from AUX's",
+    "hand-typed registry, which had two errors this probe exposed: InventoryMasters is",
+    "doNotExtend on this environment, and WorkOrderMasters has three primary keys.",
+    "pk_fields is ORDERED and COMPLETE because the captured relation maps EVERY parent",
+    "PK (captures/2026-08-12_embedded_EmbeddedExmpl2.md), replacing AUX's single",
+    "fk_field model (aux qad_entity_registry.py:37-82).",
+    "The registry file is a menu; core/parent_registry.py can re-verify any entry live",
+    "at gate time, and the live answer wins when they disagree."
+  ],
+  "parents": [
+    {
+      "key": "Items",
+      "label": "Items (Item Master)",
+      "uri": "urn:be:com.qad.base.item.IItem",
+      "entity_code": "Items",
+      "domain_field": "DomainCode",
+      "pk_fields": [
+        {"code": "DomainCode", "dataType": "character"},
+        {"code": "ItemCode", "dataType": "character"}
+      ],
+      "offerable": true,
+      "description": "Item master records. The capture-proven parent: EmbeddedExmpl2 embeds here."
+    },
+    {
+      "key": "SalesOrderHeaders",
+      "label": "Sales Order Headers",
+      "uri": "urn:be:com.qad.sales.salesorder.ISalesOrderHeader",
+      "entity_code": "SalesOrderHeaders",
+      "domain_field": "DomainCode",
+      "pk_fields": [
+        {"code": "DomainCode", "dataType": "character"},
+        {"code": "SalesOrderNumber", "dataType": "character"}
+      ],
+      "offerable": true,
+      "description": "Sales order header records."
+    },
+    {
+      "key": "PurchaseOrderHeaders",
+      "label": "Purchase Order Headers",
+      "uri": "urn:be:com.qad.purchasing.purchaseorders.IPurchaseOrderHeader",
+      "entity_code": "PurchaseOrderHeaders",
+      "domain_field": "DomainCode",
+      "pk_fields": [
+        {"code": "DomainCode", "dataType": "character"},
+        {"code": "PurchaseOrderNumber", "dataType": "character"}
+      ],
+      "offerable": true,
+      "description": "Purchase order header records."
+    },
+    {
+      "key": "WorkOrderMasters",
+      "label": "Work Order Masters",
+      "uri": "urn:be:com.qad.pushproduction.workorder.IWorkOrderMaster",
+      "entity_code": "WorkOrderMasters",
+      "domain_field": "DomainCode",
+      "pk_fields": [
+        {"code": "DomainCode", "dataType": "character"},
+        {"code": "WorkOrderNumber", "dataType": "character"},
+        {"code": "WorkOrderID", "dataType": "character"}
+      ],
+      "offerable": true,
+      "description": "Work order records. THREE primary keys, all of which the relation must map."
+    },
+    {
+      "key": "InventoryMasters",
+      "label": "Inventory Masters",
+      "uri": "urn:be:com.qad.inventory.inv.IInventoryMaster",
+      "entity_code": "InventoryMasters",
+      "domain_field": "DomainCode",
+      "pk_fields": [
+        {"code": "DomainCode", "dataType": "character"},
+        {"code": "ItemCode", "dataType": "character"},
+        {"code": "SiteCode", "dataType": "character"}
+      ],
+      "offerable": false,
+      "not_offerable_because": "doNotExtend=true on eeadaptive (live read 2026-08-12). QAD will reject an extension against it.",
+      "description": "Inventory master records. Kept in the file so nobody re-adds it from AUX without seeing why it is off."
+    }
+  ]
+}

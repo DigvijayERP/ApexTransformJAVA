@@ -394,6 +394,89 @@ def main() -> int:
     referenced = {w for s in stages.STAGES for w in s.writes}
     check("every stage write exists in the registry", sorted(referenced - known), [])
 
+    section("17. Embedded manifest (Case 2)")
+    check("five stages", stages.total("embedded"), 5)
+    check("stage order", [s.id for s in stages.stage_list("embedded")],
+          ["requirements", "fields", "relate", "deploy", "view"])
+    check("the embedded view is GATED, unlike the standard one",
+          stages.get("view", "embedded").gated, True)
+    check("and conditional on the requirements flag",
+          stages.get("view", "embedded").conditional_on, "separate_view_wanted")
+    check("deploy is not terminal in embedded mode",
+          stages.next_after("deploy", "embedded").id, "view")
+    check("every embedded write exists in the registry",
+          sorted({w for s in stages.stage_list("embedded") for w in s.writes} - known), [])
+
+    section("18. Embedded builders match the EmbeddedExmpl2 capture")
+    from builders import embedded_builder as emb
+    from core import parent_registry as pr
+    e_spec = {
+        "bc_pascal": "CapCheck", "description": "capture fidelity",
+        "parent_key": "Items",
+        "fields": [
+            {"code": "DomainCode", "dataType": "character", "primaryKey": 1, "isRequired": True},
+            {"code": "ItemCode", "dataType": "character", "primaryKey": 2, "isRequired": True},
+            {"code": "CapCheckCode", "dataType": "character", "primaryKey": 3, "isRequired": True},
+            {"code": "Notes", "dataType": "character", "primaryKey": None},
+            {"code": "Rating", "dataType": "dropdown", "primaryKey": None,
+             "dropdownValues": [{"code": "A", "label": "A"}, {"code": "B", "label": "B"}]},
+        ],
+    }
+    built = emb.build_embedded_entity_payload(e_spec, ident)
+    em = built["payload"]["entityMetadatas"][0]
+    check("top-level uri is the capture's generic constant",
+          em["uri"], "urn:be:com.qad.qra.app.IApp:")
+    check("extension flags", [em["isDataExtensionOnly"], em["isDataExtensionEnable"],
+          em["isBusinessDocument"]], [True, True, False])
+    check("physical table keeps the xx prefix",
+          built["payload"]["entityDeployments"][0]["initialTableName"], "xxcapcheck")
+    check("fieldURI follows the capture shape",
+          em["entityFields"][0]["fieldURI"],
+          "urn:field:com.yash.digwish.CapCheck.ICapCheck:xxcapcheck.DomainCode")
+    check("no modelId and no percent-encoding anywhere",
+          ["modelId" in json.dumps(built["payload"]),
+           "%2E" in json.dumps(built["payload"])], [False, False])
+    check("every field carries a client uniqueID",
+          all(f.get("uniqueID") for f in em["entityFields"]), True)
+    check("PKs forced required", [f["isRequired"] for f in em["entityFields"][:3]],
+          [True, True, True])
+    check("dropdown enters the second-save map keyed by its exact code",
+          list(built["field_list_map"]), ["Rating"])
+    check("dropdown stored as character with empty dataListCode at create",
+          [(f["dataType"], f["dataListCode"]) for f in em["entityFields"]
+           if f["entityFieldCode"] == "Rating"], [("character", "")])
+
+    rel = emb.build_relation_payload(e_spec, pr.get("Items"), ident,
+                                     relation_id="11111111-2222-3333-4444-555555555555")
+    row = rel["payload"]["BERelations"][0]
+    check("top-level keys, capitalised BERelations included",
+          sorted(rel["payload"]), ["BERelations", "supplementaryMessages"])
+    check("uri echoes the relationID",
+          row["uri"], "urn:be:com.qad.qra.berelation.IBERelation:"
+                      "11111111-2222-3333-4444-555555555555")
+    check("capture flag set", [row["isExtension"], row["isEmbedded"],
+          row["isIncludeOnParent"], row["isParent"], row["isCascadeDeleteForBD"],
+          row["isUseInBusinessDocument"]], [True, False, False, False, True, True])
+    check("cardinality client-sent", row["cardinality"], "MANYTOONE")
+    check("every parent PK mapped",
+          [(m["sourceFieldCode"], m["relatedFieldCode"]) for m in row["BERelationFields"]],
+          [("DomainCode", "DomainCode"), ("ItemCode", "ItemCode")])
+
+    # A child spec missing a parent-PK mirror must refuse to build, loudly.
+    bad = dict(e_spec)
+    bad["fields"] = [f for f in e_spec["fields"] if f["code"] != "ItemCode"]
+    try:
+        emb.build_relation_payload(bad, pr.get("Items"), ident)
+        check("missing PK mirror refused", False, True)
+    except ValueError as exc:
+        check("missing PK mirror refused", "no 'ItemCode' field" in str(exc), True)
+
+    check("InventoryMasters is in the file but never offerable",
+          [p.key for p in pr.all_parents() if not p.offerable], ["InventoryMasters"])
+    check("WorkOrderMasters carries all three PKs",
+          [f["code"] for f in pr.get("WorkOrderMasters").pk_fields],
+          ["DomainCode", "WorkOrderNumber", "WorkOrderID"])
+
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} check(s) — {', '.join(FAILURES)}")

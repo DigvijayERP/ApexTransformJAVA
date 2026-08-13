@@ -767,6 +767,38 @@ new environment. AUX's most intricate embedded-builder code was reproducing old-
 Remaining before build start: owner confirms the embedded grid is visible on the Items screen
 (settles U4/U9/U10), plus the scope calls on step 8, .p input, and duplicate fast-fail.
 
+### Case 2 BUILT — the embedded pipeline exists end to end, dry-run green (2026-08-12)
+
+Owner settled the last three unknowns (grid visible on Items; standalone view IN scope;
+`.p`/`.cls` input IN scope) and the build followed the same day. What landed:
+
+- **Mode-aware stage identity.** `core/stages.py` now carries per-mode manifests; embedded runs
+  get requirements → fields → relate → deploy → view (conditional, gated, experimental). Same-named
+  stages differ per mode (the embedded view is gated, deploy is not terminal), so every behavioural
+  lookup now passes the run's mode; the mode-less form survives only as store validation.
+- **Engine stages** `stage_e_requirements` (parent picker with deterministic no-LLM override),
+  `stage_e_fields` (PK trio REBUILT deterministically: mirrors of every parent PK + child PK, the
+  model only contributes custom fields), `stage_e_relate`, shared `stage_deploy`, `stage_e_view`.
+- **Builders from the capture, not AUX**: `builders/embedded_builder.py` reproduces the
+  EmbeddedExmpl2 entity save and BERelation field-for-field (no percent-encoding, no modelId,
+  client uniqueIDs, plain-UUID relationID, every parent PK mapped).
+- **Parent registry**: `config/parents.json` seeded from the live probe (InventoryMasters kept but
+  `offerable: false`; WorkOrderMasters with all three PKs) + `core/parent_registry.py` with
+  gate-time live re-verification. Live wins over file, differences surface as warnings.
+- **Progress parser ported** with the multi-table rework (83/83 checks); both requirements stages
+  now ground on parsed ABL when the input contains it. The port also fixes five AUX parser bugs,
+  including silently dropping hyphenated names.
+- **Frontend**: mode toggle on the start screen, per-mode manifest rendering, parent-picker gate,
+  relation-mapping gate, embedded completion copy pointing at the parent screen.
+- **Two dry-run purity fixes found by the build**: the Case 1 lookup picker was silently making a
+  LIVE GET during "zero network" dry runs (exposed when the network dropped mid-test; now skipped
+  on dry runs with a warning), and a run whose LAST stage skips itself (embedded view) stayed
+  "running" forever (self-skip now advances/completes the run).
+
+All three suites green: smoke_test, pipeline_test (embedded end-to-end section 12), parser tests.
+Not yet done: a live embedded run through the app (next session's Test), and the adversarial
+review of this diff which ran before commit.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

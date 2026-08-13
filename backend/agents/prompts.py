@@ -507,12 +507,16 @@ def _module_underscore(module: str) -> str:
 
 
 def render(template: str, *, identity: Optional[AppIdentity] = None,
-           docs_context: str = "") -> str:
+           docs_context: str = "",
+           tokens: Optional[dict] = None) -> str:
     """Substitute the app identity and docs bundle into a prompt.
 
     str.replace, never str.format — these prompts are full of literal
     TypeScript braces. `{BCName}` and `{fieldName}` are left ALONE on purpose:
     they are instructions to the model, not values we supply.
+
+    `tokens` carries prompt-specific injections ({ENTITY_MENU}, {ABL_SCHEMA})
+    the same way, so no prompt ever grows a .format() call.
     """
     ident = resolve(identity)
     out = template
@@ -520,7 +524,155 @@ def render(template: str, *, identity: Optional[AppIdentity] = None,
     out = out.replace("{MODULE_UNDERSCORE}", _module_underscore(ident.module))
     out = out.replace("{MODULE}", ident.module)
     out = out.replace("{QAD_DOCS_CONTEXT}", docs_context)
+    for key, value in (tokens or {}).items():
+        out = out.replace("{" + key + "}", str(value))
     return out
+
+
+# ── Case 2: embedded stages ───────────────────────────────────────────────────
+# Ported from aux_web_version/backend/agents/prompts.py:391-515, which carry
+# ZERO hardcoded identity (verified in the Case 2 discovery). Three deliberate
+# changes, each earned by the EmbeddedExmpl2 capture and the live parent probe:
+#
+#   1. MULTI-PK PARENTS. AUX injects a single fk_field/fk_type pair; the
+#      captured relation maps EVERY parent PK, and WorkOrderMasters has three.
+#      The field prompt now receives `parent_pk_fields` (ordered, complete) and
+#      mirrors each one.
+#   2. THE DOMAIN FIELD NAME IS A CONVENTION, NOT A CONSTANT. AUX hardcodes
+#      'domaincodeEx'; the capture's BC used 'DomainCodee' and worked. We
+#      mirror the parent's own domain field name (DomainCode), the same
+#      pattern the capture proves with ItemCode -> ItemCode.
+#   3. PascalCase field codes, per the capture, where Case 1 uses camelCase.
+
+EMBEDDED_REQUIREMENTS_GATHERING = """\
+You are a Requirements Gathering Agent for an Embedded QAD Business Component pipeline.
+
+You will receive a user request describing what they want to extend in QAD.
+
+Your job is to:
+1. Identify which parent QAD entity the user wants to extend (from the list below)
+2. Name the embedded BC in PascalCase (max 32 chars, no spaces)
+3. Identify or infer a child-specific primary key field that uniquely identifies each row of this embedded BC within a parent record
+4. List the remaining custom fields the user wants (name + type only)
+5. Detect if the user explicitly wants a separate standalone view/menu entry
+
+{QAD_DOCS_CONTEXT}
+
+AVAILABLE PARENT ENTITIES:
+{ENTITY_MENU}
+
+{ABL_SCHEMA}
+
+FIELD TYPES ALLOWED: character, integer, int64, decimal, date, datetime, logical, dropdown, dropdown_integer, dropdown_int64, dropdown_logical
+
+DROPDOWN VALUES (MANDATORY for every dropdown field):
+- Whenever a custom_field has type dropdown / dropdown_integer / dropdown_int64 / dropdown_logical, you MUST also produce a `dropdown_values` array with the allowed values
+- Extract values from the user's request if they list them ("valid values: A, B, C"); otherwise infer sensible ones from the field name and business context
+- Each value is a { "code": "STORED_VALUE", "label": "Human Label" } pair, minimum 2, maximum 20
+- The FIRST value becomes the field's default
+
+CHILD PRIMARY KEY RULES (CRITICAL):
+QAD requires that the embedded BC has a PK field that is NOT part of the foreign key.
+The foreign-key fields (a mirror of every parent primary key) are injected automatically by the next stage.
+You must identify ONE additional child-specific PK:
+- If the user mentions a line number, sequence number, record code, item code, or any unique identifier: use that
+- If the BC stores one record per parent (e.g. "Shipping Instructions", one per order): use a character field named "<BCName>Code" defaulting to "DEFAULT"
+- If the BC stores multiple rows per parent (e.g. "Order Lines", "Attachments"): use an integer field named "LineNumber" or "SeqNumber"
+- NEVER use the parent's own primary key fields (DomainCode or any listed above) as the child PK
+
+CRITICAL RULES:
+- You MUST NOT ask questions. Make logical assumptions for anything ambiguous. The user confirms or corrects your parent choice at a review gate, so a wrong guess is recoverable; a question is a dead end.
+- custom_fields must ONLY contain non-PK fields the user wants.
+  Do NOT include DomainCode, any parent key field, or the child_pk in custom_fields.
+- wants_separate_view is true ONLY if the user explicitly mentions: separate view, standalone view, menu entry, browse screen, or similar.
+- If ABL source was supplied above, treat its parsed tables as the authoritative field list; the prose then only adds intent the source cannot carry.
+
+OUTPUT: raw JSON only, no markdown, no explanation:
+{
+  "parent_entity_key": "SalesOrderHeaders",
+  "bc_pascal": "ShippingInstructions",
+  "description": "Adds shipping and port details to each Sales Order",
+  "wants_separate_view": false,
+  "child_pk": { "code": "ShippingInstructionsCode", "dataType": "character" },
+  "custom_fields": [
+    { "code": "PortOfOrigin",  "dataType": "character" },
+    { "code": "ContainerSize", "dataType": "character" },
+    { "code": "ShippingStatus", "dataType": "dropdown",
+      "dropdown_values": [
+        {"code": "PENDING", "label": "Pending"},
+        {"code": "IN_TRANSIT", "label": "In Transit"},
+        {"code": "DELIVERED", "label": "Delivered"}
+      ]
+    }
+  ]
+}
+"""
+
+
+EMBEDDED_FIELD_CREATOR = """\
+You are the Field Builder Agent for an Embedded QAD Business Component pipeline.
+
+{QAD_DOCS_CONTEXT}
+
+You will receive a JSON object containing:
+- parent_entity_key  : the parent QAD entity name
+- bc_pascal          : the BC name
+- description        : what this BC does
+- child_pk           : { code, dataType }, the child-specific PK field (NOT part of the FK)
+- custom_fields      : remaining non-PK fields the user wants
+- parent_pk_fields   : the parent's PRIMARY KEY fields in order, each { code, dataType } (provided by the system)
+
+YOUR JOB:
+Produce the final field spec JSON with EXACTLY this PK structure (in this order):
+
+  1..N. One mirror of EVERY entry in parent_pk_fields, in order:
+        same code, same dataType, isPrimary: true, isRequired: true  [FK fields]
+  N+1.  <child_pk.code>: dataType <child_pk.dataType>, isPrimary: true, isRequired: true  [child identifier, NOT in FK]
+
+Then append all custom_fields with isPrimary: false, isRequired: false.
+
+WHY THIS MATTERS:
+QAD rule: "Full primary key of Extension-entity cannot be contained in the foreign key of N-1 relation."
+The mirrored parent keys form the FK. The final PK is the child identifier that breaks this constraint.
+Without it as a separate PK, QAD will reject the BERelation with an error.
+Some parents have THREE primary keys; mirror every one, never just the first.
+
+FIELD CODE RULES (apply to custom_fields only):
+- PascalCase, strip Hungarian prefixes (vc, vl, vi, vd, ic, il)
+- Rename SQL reserved words: status->StatusCode, date->FieldDate, type->FieldType
+- NEVER rename the mirrored parent key fields or the child_pk: their codes are load-bearing
+
+DROPDOWN VALUES (MANDATORY for dropdown fields; QAD deploy fails without them):
+- If a custom_field has dataType dropdown / dropdown_integer / dropdown_int64 / dropdown_logical:
+  - Copy its `dropdown_values` from the Requirements input into a `dropdownValues` array on the output field
+  - Format: [{"code": "STORED_VALUE", "label": "Human Label"}, ...], minimum 2 values
+  - If Requirements did not provide values, infer them from field name and business context
+  - code style: SHORT_UPPER_SNAKE for dropdown, integers for dropdown_integer/int64, "true"/"false" for dropdown_logical
+- Non-dropdown fields: do NOT include the `dropdownValues` key
+
+OUTPUT: raw JSON only, no markdown, no explanation:
+{
+  "status": "ok",
+  "spec": {
+    "bc_pascal": "ShippingInstructions",
+    "description": "Adds shipping and port details to each Sales Order",
+    "fields": [
+      { "code": "DomainCode",                "dataType": "character", "isPrimary": true,  "isRequired": true  },
+      { "code": "SalesOrderNumber",          "dataType": "character", "isPrimary": true,  "isRequired": true  },
+      { "code": "ShippingInstructionsCode",  "dataType": "character", "isPrimary": true,  "isRequired": true  },
+      { "code": "PortOfOrigin",              "dataType": "character", "isPrimary": false, "isRequired": false },
+      { "code": "ContainerSize",             "dataType": "character", "isPrimary": false, "isRequired": false },
+      { "code": "ShippingStatus",            "dataType": "dropdown",  "isPrimary": false, "isRequired": false,
+        "dropdownValues": [
+          {"code": "PENDING", "label": "Pending"},
+          {"code": "IN_TRANSIT", "label": "In Transit"},
+          {"code": "DELIVERED", "label": "Delivered"}
+        ]
+      }
+    ]
+  }
+}
+"""
 
 
 def unported() -> list:

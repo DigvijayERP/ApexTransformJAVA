@@ -43,7 +43,10 @@ const post = <T,>(path: string, body?: unknown) =>
 // ── Types mirroring the backend ──────────────────────────────────────────────
 export type ArtifactKind =
   | "text" | "field_spec" | "field_spec_diff" | "form_layout"
-  | "handler_code" | "view_config" | "lookup_config" | "deploy_preview";
+  | "handler_code" | "view_config" | "lookup_config" | "deploy_preview"
+  | "embedded_requirements" | "relation_config";
+
+export type RunMode = "standard" | "embedded";
 
 export interface Stage {
   id: string;
@@ -57,7 +60,11 @@ export interface Stage {
   conditional_on: string | null;
 }
 
+// Per-mode since Case 2. The legacy top-level stage list mirrors "standard";
+// everything here reads modes[run.mode] so the embedded rail renders its own
+// manifest, never a fixed table.
 export interface Manifest {
+  modes: Record<RunMode, { total: number; stages: Stage[] }>;
   total: number;
   stages: Stage[];
   recovery: Stage;
@@ -91,6 +98,7 @@ export interface QadWrite {
 export interface Run {
   id: string;
   status: string;
+  mode: RunMode;
   current_stage: string | null;
   bc_pascal: string | null;
   dry_run: boolean;
@@ -148,6 +156,8 @@ export interface StageInput {
   instruction?: string;
   browse_uris?: Record<string, string>;
   configs?: Record<string, any>[];
+  /** Embedded requirements gate: override the LLM's parent choice. */
+  parent_key?: string;
 }
 
 // ── The API ──────────────────────────────────────────────────────────────────
@@ -155,8 +165,9 @@ export const api = {
   health: () => call<Health>("/api/health"),
   manifest: () => call<Manifest>("/api/run/stages"),
 
-  createRun: (user_input: string, dry_run = true) =>
-    post<{ run_id: string; dry_run: boolean; first_stage: string }>("/api/run", { user_input, dry_run }),
+  createRun: (user_input: string, dry_run = true, mode: RunMode = "standard") =>
+    post<{ run_id: string; dry_run: boolean; mode: RunMode; first_stage: string }>(
+      "/api/run", { user_input, dry_run, mode }),
 
   getRun: (id: string) => call<RunState>(`/api/run/${id}`),
   getStage: (id: string, stage: string) => call<StoredStage>(`/api/run/${id}/stage/${stage}`),

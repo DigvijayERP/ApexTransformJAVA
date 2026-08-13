@@ -59,7 +59,9 @@ function FieldSpec({ a }: { a: Bag }) {
                     {safe && <span className="rename" title="renamed, SQL reserved word">→ {safe}</span>}
                   </td>
                   <td>{f.dataType}{f.maxLength ? ` (${f.maxLength})` : ""}</td>
-                  <td>{f.isPrimary ? "PK" : ""}</td>
+                  {/* Standard specs carry isPrimary booleans; embedded specs
+                      carry 1-based primaryKey ordinals. Render either. */}
+                  <td>{f.primaryKey ? `PK ${f.primaryKey}` : f.isPrimary ? "PK" : ""}</td>
                   <td>{f.isRequired ? "yes" : ""}</td>
                   <td>{f.needsLookup ? "yes" : ""}</td>
                   <td className="vals">
@@ -343,12 +345,112 @@ function DeployPreview({ a }: { a: Bag }) {
   );
 }
 
+function EmbeddedRequirements({ a, onParentKey }: {
+  a: Bag; onParentKey?: (key: string) => void;
+}) {
+  const req: Bag = a.requirements ?? {};
+  const parent: Bag = a.parent ?? {};
+  const options: Bag[] = a.parent_options ?? [];
+  const [choice, setChoice] = useState<string>(parent.key ?? "");
+  const customs: Bag[] = req.custom_fields ?? [];
+
+  return (
+    <>
+      <Section title={`${req.bc_pascal ?? "Embedded BC"}: what will be built`}>
+        <p className="muted">{req.description}</p>
+        <ul className="plain">
+          <li>Child key: <code>{req.child_pk?.code}</code> ({req.child_pk?.dataType})</li>
+          <li>
+            Custom fields:{" "}
+            {customs.length
+              ? customs.map((f) => f.code).join(", ")
+              : "none"}
+          </li>
+          <li>Separate standalone view: {a.wants_separate_view ? "yes (experimental)" : "no"}</li>
+        </ul>
+      </Section>
+
+      <Section title="Parent component it extends">
+        <p className="muted">
+          The model proposed <strong>{parent.label ?? parent.key}</strong>. You
+          decide. Every primary key of the chosen parent is mirrored into the
+          child and mapped in the relation.
+        </p>
+        <label className="field">
+          <span>Parent</span>
+          <select value={choice} onChange={(e) => setChoice(e.target.value)}>
+            {options.map((o) => (
+              <option key={o.key} value={o.key}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        {(() => {
+          const chosen = options.find((o) => o.key === choice) ?? parent;
+          return (
+            <p className="muted">
+              Keys to mirror:{" "}
+              {(chosen.pk_fields ?? []).map((f: Bag) => f.code).join(", ")}
+              {"  "}<code>{chosen.uri}</code>
+            </p>
+          );
+        })()}
+        {onParentKey && choice && choice !== parent.key && (
+          <button className="ghost" onClick={() => onParentKey(choice)}>
+            Use {choice} instead
+          </button>
+        )}
+      </Section>
+
+      {(a.abl_tables ?? []).length > 0 && (
+        <Section title="Parsed from your ABL source">
+          <ul className="plain">
+            {a.abl_tables.map((t: Bag) => (
+              <li key={t.name}>
+                <code>{t.name}</code>: {(t.fields ?? []).length} field{(t.fields ?? []).length === 1 ? "" : "s"}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+    </>
+  );
+}
+
+function RelationConfig({ a }: { a: Bag }) {
+  const s: Bag = a.summary ?? {};
+  const maps: Bag[] = s.mappings ?? [];
+  return (
+    <>
+      <Section title={`Relate ${s.bc_pascal} to ${s.parent_key}`}>
+        <p className="muted">
+          Cardinality {s.cardinality}: many child rows per parent record, shown
+          as an embedded grid on the parent's form after deploy.<br />
+          Parent <code>{s.parent_uri}</code>
+        </p>
+        <table className="grid">
+          <thead><tr><th>Child field</th><th>Maps to parent field</th></tr></thead>
+          <tbody>
+            {maps.map((m) => (
+              <tr key={m.child}>
+                <td><code>{m.child}</code></td>
+                <td><code>{m.parent}</code></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Section>
+      <Payload value={a.payload_preview} label="Exact payload QAD will receive" />
+    </>
+  );
+}
+
 // ── Dispatch ─────────────────────────────────────────────────────────────────
-export function Artifact({ kind, artifact, onBrowseUris, onConfigure }: {
+export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKey }: {
   kind: ArtifactKind | undefined;
   artifact: Bag;
   onBrowseUris?: (v: Record<string, string>) => void;
   onConfigure?: (c: Bag[]) => void;
+  onParentKey?: (key: string) => void;
 }) {
   switch (kind) {
     case "text":            return <Text a={artifact} />;
@@ -359,6 +461,9 @@ export function Artifact({ kind, artifact, onBrowseUris, onConfigure }: {
     case "view_config":     return <ViewConfig a={artifact} />;
     case "lookup_config":   return <LookupConfig a={artifact} onConfigure={onConfigure} />;
     case "deploy_preview":  return <DeployPreview a={artifact} />;
+    case "embedded_requirements":
+      return <EmbeddedRequirements a={artifact} onParentKey={onParentKey} />;
+    case "relation_config": return <RelationConfig a={artifact} />;
     default:
       // Never drop it. An unrenderable artifact is still a decision the user
       // is being asked to make.

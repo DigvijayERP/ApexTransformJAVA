@@ -218,42 +218,165 @@ RECOVERY_STAGE = Stage(
 )
 
 
-_BY_ID: Dict[str, Stage] = {s.id: s for s in STAGES}
-_BY_ID[RECOVERY_STAGE.id] = RECOVERY_STAGE
+# ── Case 2: the embedded manifest (owner scope decisions, 2026-08-12) ────────
+#
+# An embedded child BC under an existing parent is SMALLER on the wire than a
+# standalone one: child BC + one BERelation + deploy. No form, no handler, no
+# lookups — the parent's form grows the embedded grid automatically after a
+# child-only deploy (confirmed live on EmbeddedExmpl2, 2026-08-12). Payload
+# authority is captures/2026-08-12_embedded_EmbeddedExmpl2.md, not AUX.
+EMBEDDED_STAGES: List[Stage] = [
+    Stage(
+        id="requirements",
+        number=1,
+        label="Requirement gathering",
+        description=(
+            "Read what you asked for, propose the embedded BC and WHICH PARENT it "
+            "extends. The parent comes from a menu of components verified against "
+            "this environment, and you confirm or change the choice here before "
+            "anything else happens. Pasted ABL source (.p/.cls) is parsed "
+            "deterministically and grounds the design."
+        ),
+        gated=True,
+        artifact_kind="embedded_requirements",
+    ),
+    Stage(
+        id="fields",
+        number=2,
+        label="Field mapping",
+        description=(
+            "Design the child's fields. The first fields are fixed by the platform: "
+            "one mirror of every parent primary key, then the child's own key, then "
+            "your custom fields. Approving POSTS the embedded Business Component to "
+            "QAD in one save, and wires any dropdowns to their data lists."
+        ),
+        gated=True,
+        writes=["bc.create", "bc.metadata.read", "bc.metadata.write"],
+        artifact_kind="field_spec",
+        editable=True,
+        locks_upstream=True,
+    ),
+    Stage(
+        id="relate",
+        number=3,
+        label="Relate to parent",
+        description=(
+            "The write that makes it embedded: one child-to-parent relation mapping "
+            "every parent primary key. The gate shows the parent, the cardinality "
+            "and each field mapping exactly as they will be sent."
+        ),
+        gated=True,
+        writes=["relation.create"],
+        artifact_kind="relation_config",
+        locks_upstream=True,
+    ),
+    Stage(
+        id="deploy",
+        number=4,
+        label="Deploy",
+        description=(
+            "Show QAD's deployment warnings and the exact deploy payloads, then "
+            "deploy the child on approval. The parent is never redeployed. After "
+            "this, open the parent's screen and refresh: the extension grid and "
+            "tab appear there."
+        ),
+        gated=True,
+        writes=["deploy.check_warnings", "deploy.business_entity"],
+        artifact_kind="deploy_preview",
+        locks_upstream=True,
+    ),
+    Stage(
+        id="view",
+        number=5,
+        label="Standalone view",
+        description=(
+            "Register a separate menu view for the child. EXPERIMENTAL: the QAD "
+            "training guides say embedded BCs are not menu-accessible, and the "
+            "reference app never provably exercised this. Runs only when you asked "
+            "for a separate view, and the gate shows exactly what would be "
+            "registered."
+        ),
+        gated=True,
+        writes=["view.register"],
+        artifact_kind="view_config",
+        locks_upstream=True,
+        conditional_on="separate_view_wanted",
+    ),
+]
 
 
-def get(stage_id: str) -> Stage:
-    if stage_id not in _BY_ID:
-        raise KeyError(
-            f"Unknown stage '{stage_id}'. Known: {', '.join(sorted(_BY_ID))}"
-        )
-    return _BY_ID[stage_id]
+MODES: Dict[str, List[Stage]] = {
+    "standard": STAGES,
+    "embedded": EMBEDDED_STAGES,
+}
+
+_BY_MODE: Dict[str, Dict[str, Stage]] = {
+    m: {s.id: s for s in lst} for m, lst in MODES.items()
+}
+_BY_MODE["standard"][RECOVERY_STAGE.id] = RECOVERY_STAGE
 
 
-def first() -> Stage:
-    return STAGES[0]
+def _mode(mode: str) -> Dict[str, Stage]:
+    if mode not in _BY_MODE:
+        raise KeyError(f"Unknown run mode '{mode}'. Known: {', '.join(sorted(_BY_MODE))}")
+    return _BY_MODE[mode]
 
 
-def next_after(stage_id: str) -> Optional[Stage]:
+def stage_list(mode: str = "standard") -> List[Stage]:
+    if mode not in MODES:
+        raise KeyError(f"Unknown run mode '{mode}'. Known: {', '.join(sorted(MODES))}")
+    return MODES[mode]
+
+
+def get(stage_id: str, mode: Optional[str] = None) -> Stage:
+    """Look a stage up, strictly within one mode when given.
+
+    Without a mode this is VALIDATION ONLY — several ids exist in both manifests
+    with different gating and writes, so behavioural callers must pass the
+    run's mode. The store uses the mode-less form purely to refuse storing an
+    id no manifest knows.
+    """
+    if mode is not None:
+        table = _mode(mode)
+        if stage_id not in table:
+            raise KeyError(
+                f"Unknown stage '{stage_id}' for mode '{mode}'. "
+                f"Known: {', '.join(sorted(table))}")
+        return table[stage_id]
+    for table in _BY_MODE.values():
+        if stage_id in table:
+            return table[stage_id]
+    known = sorted({sid for t in _BY_MODE.values() for sid in t})
+    raise KeyError(f"Unknown stage '{stage_id}'. Known: {', '.join(known)}")
+
+
+def first(mode: str = "standard") -> Stage:
+    return stage_list(mode)[0]
+
+
+def next_after(stage_id: str, mode: str = "standard") -> Optional[Stage]:
     """The next stage in the happy path. Recovery stages return to their host."""
     if stage_id == RECOVERY_STAGE.id:
-        return next_after("fields")
-    ids = [s.id for s in STAGES]
+        return next_after("fields", mode)
+    lst = stage_list(mode)
+    ids = [s.id for s in lst]
     if stage_id not in ids:
-        raise KeyError(f"Unknown stage '{stage_id}'")
+        raise KeyError(f"Unknown stage '{stage_id}' for mode '{mode}'")
     i = ids.index(stage_id)
-    return STAGES[i + 1] if i + 1 < len(STAGES) else None
+    return lst[i + 1] if i + 1 < len(lst) else None
 
 
-def stages_after(stage_id: str) -> List[Stage]:
+def stages_after(stage_id: str, mode: str = "standard") -> List[Stage]:
     """Every stage downstream of this one — what a regeneration must re-run."""
-    ids = [s.id for s in STAGES]
+    lst = stage_list(mode)
+    ids = [s.id for s in lst]
     if stage_id not in ids:
         return []
-    return STAGES[ids.index(stage_id) + 1:]
+    return lst[ids.index(stage_id) + 1:]
 
 
-def applies(stage_id: str, artifacts: Dict[str, Any]) -> Optional[bool]:
+def applies(stage_id: str, artifacts: Dict[str, Any],
+            mode: str = "standard") -> Optional[bool]:
     """Does this stage apply to THIS run, given what earlier stages produced?
 
         True   it will run — for a conditional stage, its condition is met
@@ -269,7 +392,7 @@ def applies(stage_id: str, artifacts: Dict[str, Any]) -> Optional[bool]:
     met: a lookup stage with a marked field is REQUIRED for that run, and
     labelling it optional invites the user to skip work they actually need.
     """
-    stage = get(stage_id)
+    stage = get(stage_id, mode)
     if not stage.conditional_on:
         return True
 
@@ -290,22 +413,39 @@ def applies(stage_id: str, artifacts: Dict[str, Any]) -> Optional[bool]:
             return None
         return any(f.get("needsLookup") is True for f in spec.get("fields") or [])
 
+    if stage.conditional_on == "separate_view_wanted":
+        req = artifacts.get("requirements")
+        if req is None:
+            return None
+        # Symmetric with the handler rule: only an explicit False skips, so a
+        # model that forgot the flag leaves the decision with the user.
+        return req.get("wants_separate_view") is not False
+
     return None
 
 
-def total() -> int:
+def total(mode: str = "standard") -> int:
     """Derived, never hardcoded. AUX hardcodes its total in three places."""
-    return len(STAGES)
+    return len(stage_list(mode))
 
 
-def writes_to_qad(stage_id: str) -> bool:
-    return bool(get(stage_id).writes)
+def writes_to_qad(stage_id: str, mode: str = "standard") -> bool:
+    return bool(get(stage_id, mode).writes)
 
 
 def manifest() -> Dict[str, Any]:
-    """What GET /api/run/stages returns. The frontend renders from this."""
+    """What GET /api/run/stages returns. The frontend renders from this.
+
+    Per-mode since Case 2: the frontend picks the list matching the run's mode.
+    The legacy top-level keys mirror the standard mode so an older client keeps
+    rendering something truthful rather than nothing.
+    """
     return {
-        "total": total(),
+        "modes": {
+            m: {"total": total(m), "stages": [asdict(s) for s in lst]}
+            for m, lst in MODES.items()
+        },
+        "total": total("standard"),
         "stages": [asdict(s) for s in STAGES],
         "recovery": asdict(RECOVERY_STAGE),
     }

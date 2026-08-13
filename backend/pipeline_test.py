@@ -251,13 +251,16 @@ async def main() -> int:
     check("one lookup built", len(art["lookups"]), 1)
     check("fieldSet is the URI stage 2 created", art["lookups"][0]["field_uri"],
           "urn:field:com.yash.digwish.PipelineOrder.IPipelineOrder:PipelineOrder.customerName")
-    # Down to one: the captured Save settled searchFieldOperator, the
-    # concurrencyHash, and (2026-08-12, via QAD's own code-571 context paths)
-    # the lookupResultFields element KEYS. Only the element VALUE formats are
-    # still screenshot-derived, pending the first fill-carrying save.
-    check("one unverified item remains", len(out["warnings"]), 1)
-    check("and it names the element value formats",
+    # The captured Save settled searchFieldOperator, the concurrencyHash, and
+    # (2026-08-12, via QAD's own code-571 context paths) the lookupResultFields
+    # element KEYS. Remaining: the element VALUE formats (screenshot-derived,
+    # pending the first fill-carrying save), plus a dry-run-only note that the
+    # picker resolution was skipped to keep the rehearsal offline.
+    check("two warnings on a dry run", len(out["warnings"]), 2)
+    check("one names the element value formats",
           any("value" in w and "lookupResultFields" in w for w in out["warnings"]), True)
+    check("one says the picker was skipped offline",
+          any("not resolved against QAD's picker" in w for w in out["warnings"]), True)
     await engine.approve_stage(run_id, "lookups", **db)
 
     section("8. Stage 7 — deploy, terminal")
@@ -326,12 +329,134 @@ async def main() -> int:
         check("upstream regeneration refused", "already written to QAD" in str(exc), True)
         check("and says how to proceed", "different Business Component name" in str(exc), True)
 
+    section("12. Case 2 — an embedded run end to end, dry")
+    llm.set_stub(_embedded_stub)
+    run4 = await store.create_run("Extend Items with shipping details",
+                                  mode="embedded", dry_run=True, **db)
+    check("embedded run starts at requirements",
+          (await store.get_run(run4, **db))["current_stage"], "requirements")
+
+    out = await engine.run_stage(run4, "requirements", **db)
+    art = out["artifact"]
+    check("model's parent proposal surfaced", art["parent"]["key"], "Items")
+    check("doNotExtend parent is never offered",
+          "InventoryMasters" in [p["key"] for p in art["parent_options"]], False)
+    check("view flag carried for the conditional stage",
+          art["wants_separate_view"], False)
+
+    # The gate's parent picker: a deterministic swap, no model call.
+    calls_before = len(CALLS)
+    out = await engine.run_stage(run4, "requirements",
+                                 parent_key="SalesOrderHeaders", **db)
+    check("parent overridden from the gate",
+          out["artifact"]["parent"]["key"], "SalesOrderHeaders")
+    check("without a model call", len(CALLS), calls_before)
+    out = await engine.run_stage(run4, "requirements", parent_key="Items", **db)
+    await engine.approve_stage(run4, "requirements", **db)
+
+    out = await engine.run_stage(run4, "fields", **db)
+    art = out["artifact"]
+    # The model deliberately returned NO key fields (see the stub): the PK
+    # structure is platform law, so the engine rebuilds it deterministically.
+    check("every parent PK mirrored, in order",
+          art["pk_structure"]["mirrored_parent_pks"], ["DomainCode", "ItemCode"])
+    check("child PK appended after the mirrors",
+          art["pk_structure"]["child_pk"], "EmbShipCode")
+    check("field order: mirrors, child PK, customs",
+          [f["code"] for f in art["spec"]["fields"]],
+          ["DomainCode", "ItemCode", "EmbShipCode", "HandlingClass", "HazardFlag"])
+    check("embedded flags set on the payload",
+          art["payload_preview"]["entityMetadatas"][0]["isDataExtensionOnly"], True)
+    check("no modelId anywhere (the capture killed it)",
+          "modelId" in json.dumps(art["payload_preview"]), False)
+    check("dry run says the parent was not re-verified",
+          any("not re-verified" in w for w in out["warnings"]), True)
+    res = await engine.approve_stage(run4, "fields", **db)
+    check("one create call, no dropdown round-trip needed",
+          [w["endpoint"] for w in res["writes"]], ["bc.create"])
+    check("advances to relate", res["next"], "relate")
+
+    out = await engine.run_stage(run4, "relate", **db)
+    art = out["artifact"]
+    check("relation maps EVERY parent PK", art["summary"]["mappings"],
+          [{"child": "DomainCode", "parent": "DomainCode"},
+           {"child": "ItemCode", "parent": "ItemCode"}])
+    rel = art["payload_preview"]["BERelations"][0]
+    check("capture-confirmed flag set", [rel["isExtension"], rel["isEmbedded"],
+          rel["isIncludeOnParent"], rel["isUseInBusinessDocument"]],
+          [True, False, False, True])
+    check("relation id echoed in the uri",
+          rel["uri"].endswith(rel["relationID"]), True)
+    check("parent URN from the live-probed registry",
+          rel["relatedEntityURI"], "urn:be:com.qad.base.item.IItem")
+    await engine.approve_stage(run4, "relate", **db)
+
+    out = await engine.run_stage(run4, "deploy", **db)
+    check("deploy payload carries our datastore",
+          out["artifact"]["payload_preview"]["dataStoreURI"],
+          "urn:datastore:com.yash.extension")
+    res = await engine.approve_stage(run4, "deploy", **db)
+    check("deploy is NOT terminal in embedded mode", res["next"], "view")
+
+    out = await engine.run_stage(run4, "view", **db)
+    check("unwanted view skips itself", out["skipped"], True)
+    check("and the run completes on that skip",
+          (await store.get_run(run4, **db))["status"], store.RUN_COMPLETE)
+
+    listing = await store.run_stages(run4, **db)
+    check("the embedded rail has five stages", len(listing), 5)
+    check("statuses as run", [s["status"] for s in listing],
+          ["approved", "approved", "approved", "approved", "skipped"])
+    e_writes = await store.writes_for_run(run4, **db)
+    check("four calls rehearsed, in stage order",
+          [w["endpoint_id"] for w in e_writes],
+          ["bc.create", "relation.create", "deploy.check_warnings",
+           "deploy.business_entity"])
+    check("every one a dry run", all(w["dry_run"] for w in e_writes), True)
+    llm.set_stub(stub)
+
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} check(s) — {', '.join(FAILURES)}")
         return 1
     print(f"All checks passed. {len(CALLS)} stubbed model calls, zero network calls.")
     return 0
+
+
+E_REQ = {
+    "parent_entity_key": "Items",
+    "bc_pascal": "EmbShip",
+    "description": "Shipping details per item",
+    "wants_separate_view": False,
+    "child_pk": {"code": "EmbShipCode", "dataType": "character"},
+    "custom_fields": [
+        {"code": "HandlingClass", "dataType": "character"},
+        {"code": "HazardFlag", "dataType": "logical"},
+    ],
+}
+
+
+async def _embedded_stub(system: str, user: str, role: str, json_mode: bool) -> str:
+    """The embedded prompts share their opening words with the standard ones,
+    so the EMBEDDED variants are matched FIRST and the rest delegates."""
+    opening = system.split("\n", 1)[0].strip()
+    if "for an Embedded QAD Business Component pipeline" in opening:
+        CALLS.append(opening[:60])
+        if opening.startswith("You are a Requirements Gathering Agent"):
+            return json.dumps(E_REQ)
+        # The field builder deliberately omits every key field: the engine must
+        # rebuild the PK structure itself rather than trust prompt compliance.
+        return json.dumps({"status": "ok", "spec": {
+            "bc_pascal": "EmbShip",
+            "description": "Shipping details per item",
+            "fields": [
+                {"code": "HandlingClass", "dataType": "character",
+                 "isPrimary": False, "isRequired": False},
+                {"code": "HazardFlag", "dataType": "logical",
+                 "isPrimary": False, "isRequired": False},
+            ],
+        }})
+    return await stub(system, user, role, json_mode)
 
 
 async def _no_lookup_stub(system: str, user: str, role: str, json_mode: bool) -> str:

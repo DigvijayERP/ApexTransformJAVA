@@ -14,7 +14,7 @@ import {
 } from "react";
 import {
   api, ApiError,
-  type Health, type Manifest, type QadWrite, type Run,
+  type Health, type Manifest, type QadWrite, type Run, type RunMode,
   type StageInput, type StageRun, type StageStatus, type StoredStage,
 } from "./api";
 
@@ -59,7 +59,7 @@ function reducer(s: State, a: Action): State {
 interface Api {
   state: State;
   stageMeta: (id: string) => Manifest["stages"][number] | undefined;
-  start: (prompt: string, dryRun: boolean) => Promise<void>;
+  start: (prompt: string, dryRun: boolean, mode?: RunMode) => Promise<void>;
   open: (stage: string) => Promise<void>;
   run: (stage: string, input?: StageInput) => Promise<void>;
   approve: (stage: string) => Promise<void>;
@@ -122,10 +122,12 @@ export function RunProvider({ children }: { children: ReactNode }) {
   const value = useMemo<Api>(() => ({
     state,
 
-    stageMeta: (id) => state.manifest?.stages.find((s) => s.id === id),
+    // Same-named stages differ between modes (the embedded view is gated, the
+    // standard one is not), so metadata comes from the RUN's manifest.
+    stageMeta: (id) => stagesOf(state).find((s) => s.id === id),
 
-    start: async (prompt, dryRun) => {
-      const created = await guard("Starting", () => api.createRun(prompt, dryRun));
+    start: async (prompt, dryRun, mode = "standard") => {
+      const created = await guard("Starting", () => api.createRun(prompt, dryRun, mode));
       if (!created) return;
       localStorage.setItem(RUN_KEY, created.run_id);
       await sync(created.run_id);
@@ -198,8 +200,14 @@ export function RunProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
+/** The stage list for the CURRENT run's mode, falling back to standard. */
+function stagesOf(s: State): Manifest["stages"] {
+  const mode = s.run?.mode ?? "standard";
+  return s.manifest?.modes?.[mode]?.stages ?? s.manifest?.stages ?? [];
+}
+
 function nextOf(s: State, stage: string): string | null {
-  const ids = s.manifest?.stages.map((x) => x.id) ?? [];
+  const ids = stagesOf(s).map((x) => x.id);
   const i = ids.indexOf(stage);
   return i >= 0 && i + 1 < ids.length ? ids[i + 1] : null;
 }

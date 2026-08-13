@@ -135,6 +135,27 @@ input, textarea {
 input:focus, textarea:focus { border-color: var(--accent); }
 textarea { resize: none; font-size: 15px; line-height: 1.6; }
 
+select {
+  font-family: var(--font-body); font-size: 14px; width: 100%;
+  padding: 8px 10px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
+  outline: none;
+}
+
+/* Run-mode choice on the start screen. Changes the stage list, so it sits
+   above the composer rather than hiding in it. */
+.mode-toggle { display: flex; gap: 8px; }
+.mode-tab {
+  padding: 8px 16px; border-radius: 999px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-muted); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s;
+}
+.mode-tab.on {
+  color: var(--accent); border-color: rgba(139, 92, 246, 0.5);
+  background: var(--pill-bg);
+}
+
 .field { display: block; margin: 0.7rem 0; }
 .field > span { display: block; margin-bottom: 4px; color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
 .field small { display: block; font-family: var(--font-mono); font-size: 11px; opacity: 0.75; text-transform: none; letter-spacing: 0; }

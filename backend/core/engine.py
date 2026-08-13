@@ -32,6 +32,7 @@ from builders import event_handler_builder as ehb
 from builders import lookup_builder as lkb
 from builders import naming
 from builders.bc_builder import build_bc_payload, patch_dropdown_fields
+from builders.embedded_builder import build_embedded_entity_payload
 from builders.deploy_builder import build_deploy_payload
 from builders.form_builder import build_form_payload
 from builders.identity import AppIdentity
@@ -70,9 +71,10 @@ async def context(run_id: str, **db) -> Dict[str, Any]:
     if not run:
         raise StageError(f"No run '{run_id}'.")
     ctx["run"] = run
+    ctx["mode"] = run.get("mode") or "standard"
     ctx["user_input"] = run["user_input"]
     ctx["dry_run"] = run["dry_run"]
-    for stage in stages.STAGES:
+    for stage in stages.stage_list(ctx["mode"]):
         row = await store.get_stage(run_id, stage.id, **db)
         if row and row["artifact"]:
             ctx[stage.id] = row["artifact"]
@@ -99,11 +101,42 @@ def _need(ctx: Dict[str, Any], stage_id: str, what: str) -> Any:
     return art[what]
 
 
+def _abl_grounding(text: str) -> Optional[Dict[str, Any]]:
+    """Parse pasted ABL source out of the user's input, when there is any.
+
+    Deterministic and side-effect free. Returns the parse result or None; a
+    missing parser module degrades to None rather than an error, so the app
+    still runs while the parser port is landing.
+    """
+    try:
+        from core import progress_parser as pp
+    except ImportError:
+        return None
+    if not text or not pp.looks_like_abl(text):
+        return None
+    parsed = pp.parse_abl(text)
+    return parsed if parsed.get("tables") else None
+
+
+def _abl_prompt_block(parsed: Optional[Dict[str, Any]]) -> str:
+    import json as _json
+    if not parsed:
+        return ""
+    return (
+        "PARSED ABL SCHEMA (deterministic, extracted from the source the user "
+        "pasted - treat as the authoritative field list):\n"
+        + _json.dumps(parsed["tables"], indent=1)
+    )
+
+
 # ── Stage 1: requirements ────────────────────────────────────────────────────
 async def stage_requirements(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
     from agents import prompts
 
     user = ctx["user_input"]
+    abl = _abl_grounding(ctx["user_input"])
+    if abl:
+        user = f"{_abl_prompt_block(abl)}\n\n{user}"
     if instruction:
         user = f"{user}\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
 
@@ -114,7 +147,8 @@ async def stage_requirements(ctx: Dict[str, Any], instruction: str = "") -> Stag
 
     return StageResult(artifact={
         "text": text.strip(),
-        "source": "llm",
+        "source": "llm+abl" if abl else "llm",
+        "abl_tables": (abl or {}).get("tables") or [],
         # Drives whether stage 4 runs at all. None means undetermined, and the
         # handler stage then proposes rather than skipping.
         "handler_hint": _handler_hint(text),
@@ -492,7 +526,11 @@ async def stage_lookups(ctx: Dict[str, Any], instruction: str = "",
         # while QAD's own picker returns 'digSmokeTest.testCode', camelCase.
         # No naming rule was going to recover that reliably; QAD's list is the
         # only authority, so the user's input is RESOLVED against it.
-        offered = await _browse_fields(browse_uri)
+        #
+        # NOT on dry runs: a rehearsal is fully offline (found 2026-08-12 when
+        # the network dropped mid-test and the "zero network calls" suite made
+        # one). Inputs pass through unresolved and the artifact says so.
+        offered = [] if ctx["dry_run"] else await _browse_fields(browse_uri)
         result_field = _resolve_field(cfg.get("result_field", ""), offered, browse_uri)
         search_field = _resolve_field(cfg.get("search_field", "") or cfg.get("result_field", ""),
                                       offered, browse_uri)
@@ -535,7 +573,10 @@ async def stage_lookups(ctx: Dict[str, Any], instruction: str = "",
             "payload_preview": [b["payload"] for b in built],
         },
         commit=commit,
-        warnings=sorted({u for b in built for u in b["unverified"]}),
+        warnings=sorted({u for b in built for u in b["unverified"]})
+        + (["Dry run: field names were not resolved against QAD's picker; a "
+            "live run corrects their case before sending."]
+           if ctx["dry_run"] else []),
     )
 
 
@@ -578,14 +619,293 @@ async def stage_deploy(ctx: Dict[str, Any], instruction: str = "") -> StageResul
     )
 
 
+# ── Case 2: the embedded stages ──────────────────────────────────────────────
+# Payload authority is captures/2026-08-12_embedded_EmbeddedExmpl2.md. The
+# flow is deliberately smaller than Case 1: child BC + one relation + deploy,
+# with a conditional experimental view. See PHASE3_CASE2_BUILD_PLAN.md.
+
+def _e_requirements_artifact(req: Dict[str, Any],
+                             abl: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    from core import parent_registry as pr
+
+    key = str(req.get("parent_entity_key") or "")
+    try:
+        parent = pr.get(key)
+    except KeyError:
+        parent = None
+    if parent is None or not parent.offerable:
+        offered = ", ".join(p.key for p in pr.offerable())
+        why = parent.not_offerable_because if parent else "it is not in the registry"
+        raise StageError(
+            f"'{key or '(none)'}' cannot be the parent - {why}. "
+            f"Pick one of: {offered}. Regenerate with a steer, or choose a parent "
+            f"in this dialog.")
+
+    return {
+        "requirements": req,
+        "parent": parent.to_dict(),
+        # The gate renders this as a picker: the LLM proposes, the human
+        # disposes. AUX gave the user no say at all (discovery, Stale #10).
+        "parent_options": [p.to_dict() for p in pr.offerable()],
+        "wants_separate_view": req.get("wants_separate_view"),
+        "abl_tables": (abl or {}).get("tables") or [],
+    }
+
+
+async def stage_e_requirements(ctx: Dict[str, Any], instruction: str = "",
+                               parent_key: Optional[str] = None) -> StageResult:
+    from agents import prompts
+    from core import parent_registry as pr
+
+    abl = _abl_grounding(ctx["user_input"])
+
+    # A parent override from the gate is a deterministic swap, not a reason to
+    # re-roll the whole requirements JSON.
+    prev = (ctx.get("requirements") or {}).get("requirements")
+    if parent_key and prev:
+        req = dict(prev)
+        req["parent_entity_key"] = parent_key
+        return StageResult(artifact=_e_requirements_artifact(req, abl))
+
+    user = ctx["user_input"]
+    if instruction:
+        user = f"{user}\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
+
+    raw = await llm.complete(
+        prompts.render(prompts.EMBEDDED_REQUIREMENTS_GATHERING,
+                       docs_context=_docs_bundle("business_component"),
+                       tokens={"ENTITY_MENU": pr.entity_menu_for_prompt(),
+                               "ABL_SCHEMA": _abl_prompt_block(abl)}),
+        user, role="planning", json_mode=True)
+    req = llm.parse_json(raw)
+    if not isinstance(req, dict) or not req.get("bc_pascal"):
+        raise StageError("The model did not return a usable requirements object.")
+    if parent_key:
+        req["parent_entity_key"] = parent_key
+    return StageResult(artifact=_e_requirements_artifact(req, abl))
+
+
+def _mirror_parent_pks(spec_fields: List[Dict[str, Any]], pk_fields: List[Dict[str, str]],
+                       child_pk: Dict[str, Any], bc: str) -> List[Dict[str, Any]]:
+    """Enforce the PK trio deterministically, whatever the model returned.
+
+    The structure is platform law (the relation must map every parent PK, and
+    the child PK must sit outside the FK), so it is not left to prompt
+    compliance: mirrors + child PK are REBUILT here and the model's output only
+    contributes the custom fields.
+    """
+    pk_codes = {p["code"] for p in pk_fields}
+    child_code = str(child_pk.get("code") or f"{bc}Code")
+    if child_code in pk_codes:
+        child_code = f"{bc}Code"
+
+    fields: List[Dict[str, Any]] = []
+    for i, p in enumerate(pk_fields, start=1):
+        fields.append({"code": p["code"], "label": p["code"],
+                       "dataType": p.get("dataType", "character"),
+                       "primaryKey": i, "isRequired": True})
+    fields.append({"code": child_code, "label": child_code,
+                   "dataType": child_pk.get("dataType", "character"),
+                   "primaryKey": len(pk_fields) + 1, "isRequired": True})
+
+    taken = {f["code"] for f in fields}
+    for f in spec_fields:
+        code = str(f.get("code", "")).strip()
+        if not code or code in taken or f.get("isPrimary") or f.get("primaryKey"):
+            continue
+        taken.add(code)
+        out = {"code": code, "label": f.get("label") or code,
+               "dataType": f.get("dataType", "character"),
+               "primaryKey": None, "isRequired": bool(f.get("isRequired"))}
+        if f.get("dropdownValues"):
+            out["dropdownValues"] = f["dropdownValues"]
+        if f.get("maxLength") is not None:
+            out["maxLength"] = f["maxLength"]
+        fields.append(out)
+    return fields
+
+
+async def stage_e_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    from agents import prompts
+    from core import parent_registry as pr
+    import json as _json
+
+    req_art = ctx.get("requirements") or {}
+    req = req_art.get("requirements")
+    if not req:
+        raise StageError("Run and approve the requirements stage first.")
+    parent = pr.get(req_art["parent"]["key"])
+
+    # Ask QAD for the parent's CURRENT keys; the file entry is only the menu.
+    # Skipped on dry runs so a rehearsal stays fully offline, the same promise
+    # every other stage keeps.
+    warnings: List[str] = []
+    pk_fields = parent.pk_fields
+    if ctx["dry_run"]:
+        live = {"live_ok": False}
+        warnings.append(
+            "Dry run: the parent was not re-verified against QAD; the registry "
+            "entry is used as-is. A live run re-reads its keys before building.")
+    else:
+        live = await pr.verify_live(parent.key)
+    if live.get("live_ok"):
+        if live.get("do_not_extend"):
+            raise StageError(
+                f"QAD says '{parent.key}' is doNotExtend on this environment - it "
+                f"cannot be a parent. Choose a different parent at the requirements "
+                f"stage.")
+        if live.get("live_pk_fields"):
+            pk_fields = live["live_pk_fields"]
+        warnings.extend(live.get("mismatches") or [])
+    elif not ctx["dry_run"]:
+        warnings.append(
+            f"Could not verify '{parent.key}' live ({live.get('error', 'no detail')}); "
+            f"building from the registry entry.")
+
+    model_input = dict(req)
+    model_input["parent_pk_fields"] = pk_fields
+    user = _json.dumps(model_input)
+    if instruction:
+        user += f"\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
+
+    parsed = llm.parse_json(await llm.complete(
+        prompts.render(prompts.EMBEDDED_FIELD_CREATOR,
+                       docs_context=_docs_bundle("business_component")),
+        user, role="generation", json_mode=True))
+    spec_in = (parsed.get("spec") if isinstance(parsed, dict) else None) or {}
+    bc = spec_in.get("bc_pascal") or req.get("bc_pascal")
+    if not bc:
+        raise StageError("The model did not return a BC name.")
+
+    spec = {
+        "bc_pascal": bc,
+        "description": spec_in.get("description") or req.get("description", ""),
+        "parent_key": parent.key,
+        "fields": _mirror_parent_pks(spec_in.get("fields") or [], pk_fields,
+                                     req.get("child_pk") or {}, bc),
+    }
+
+    ident = AppIdentity.from_config()
+    built = build_embedded_entity_payload(spec, ident)
+
+    async def commit(dry_run: bool) -> List[Any]:
+        results = []
+        create = await qad_client.call("bc.create", payload=built["payload"],
+                                       dry_run=dry_run)
+        results.append(("bc.create", create))
+        if not create.ok:
+            return results
+        # Dropdown wiring: identical second-save contract to Case 1.
+        if built["field_list_map"]:
+            params = {"entity_uri": built["entity_uri"]}
+            got = await qad_client.call("bc.metadata.read", params=params, dry_run=dry_run)
+            results.append(("bc.metadata.read", got))
+            if got.ok and not dry_run:
+                body = got.data.get("data") if isinstance(got.data.get("data"), dict) else got.data
+                if not body.get("entityMetadatas"):
+                    return results
+                patch_dropdown_fields(body, built["field_list_map"])
+                results.append(("bc.metadata.write",
+                                await qad_client.call("bc.metadata.write", payload=body,
+                                                      params=params, dry_run=dry_run)))
+            elif dry_run:
+                preview = {"entityMetadatas": [{"entityFields": [
+                    {"entityFieldCode": code, **info}
+                    for code, info in built["field_list_map"].items()
+                ]}]}
+                results.append(("bc.metadata.write",
+                                await qad_client.call("bc.metadata.write", payload=preview,
+                                                      params=params, dry_run=True)))
+        return results
+
+    n_pks = len(pk_fields)
+    return StageResult(
+        artifact={
+            "spec": spec,
+            "bc_pascal": bc,
+            "field_count": len(spec["fields"]),
+            "entity_uri": built["entity_uri"],
+            "payload_preview": built["payload"],
+            "summary": built["summary"],
+            "pk_structure": {
+                "mirrored_parent_pks": [f["code"] for f in spec["fields"][:n_pks]],
+                "child_pk": spec["fields"][n_pks]["code"],
+                "parent_key": parent.key,
+            },
+        },
+        commit=commit,
+        warnings=warnings,
+    )
+
+
+async def stage_e_relate(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    from core import parent_registry as pr
+    from builders.embedded_builder import build_relation_payload
+
+    spec = _need(ctx, "fields", "spec")
+    parent = pr.get(spec["parent_key"])
+    built = build_relation_payload(spec, parent, AppIdentity.from_config())
+
+    async def commit(dry_run: bool) -> List[Any]:
+        return [("relation.create",
+                 await qad_client.call("relation.create", payload=built["payload"],
+                                       dry_run=dry_run))]
+
+    return StageResult(
+        artifact={
+            "summary": built["summary"],
+            "relation_id": built["relation_id"],
+            "payload_preview": built["payload"],
+        },
+        commit=commit,
+    )
+
+
+async def stage_e_view(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    if stages.applies("view", ctx, mode="embedded") is False:
+        return StageResult(
+            artifact={"wanted": False},
+            skip=True,
+            skip_reason="No separate view was requested at the requirements stage.",
+        )
+
+    spec = _need(ctx, "fields", "spec")
+    built = build_view_payload(spec, AppIdentity.from_config())
+
+    async def commit(dry_run: bool) -> List[Any]:
+        return [("view.register", await qad_client.call("view.register",
+                                                        payload=built["payload"],
+                                                        dry_run=dry_run))]
+
+    return StageResult(
+        artifact={"summary": built["summary"], "payload_preview": built["payload"]},
+        commit=commit,
+        warnings=["EXPERIMENTAL: the QAD training guides say embedded BCs are not "
+                  "menu-accessible, and the reference app never provably exercised "
+                  "this step. If QAD rejects or the view stays empty, skip it - the "
+                  "embedded grid on the parent is unaffected."],
+    )
+
+
 RUNNERS = {
-    "requirements": stage_requirements,
-    "fields": stage_fields,
-    "form": stage_form,
-    "handler": stage_handler,
-    "view": stage_view,
-    "lookups": stage_lookups,
-    "deploy": stage_deploy,
+    "standard": {
+        "requirements": stage_requirements,
+        "fields": stage_fields,
+        "form": stage_form,
+        "handler": stage_handler,
+        "view": stage_view,
+        "lookups": stage_lookups,
+        "deploy": stage_deploy,
+    },
+    "embedded": {
+        "requirements": stage_e_requirements,
+        "fields": stage_e_fields,
+        "relate": stage_e_relate,
+        # Deploy is IDENTICAL to Case 1's: same endpoints, same payloads, same
+        # warnings gate - the capture confirms the identity values.
+        "deploy": stage_deploy,
+        "view": stage_e_view,
+    },
 }
 
 
@@ -594,11 +914,15 @@ async def run_stage(run_id: str, stage_id: str, instruction: str = "",
                     db_path=None, **kwargs) -> Dict[str, Any]:
     """Produce a stage's artifact. WRITES NOTHING - approving does that."""
     db = {"db_path": db_path} if db_path else {}
-    stage = stages.get(stage_id)
     ctx = await context(run_id, **db)
+    mode = ctx["mode"]
+    stage = stages.get(stage_id, mode)
+    runner = RUNNERS[mode].get(stage_id)
+    if runner is None:
+        raise StageError(f"Stage '{stage_id}' has no runner for mode '{mode}'.")
 
     try:
-        result = await RUNNERS[stage_id](ctx, instruction=instruction, **kwargs)
+        result = await runner(ctx, instruction=instruction, **kwargs)
     except (StageError, llm.LLMError, ValueError) as exc:
         await store.save_stage(run_id, stage_id, {"error": str(exc)},
                                status=store.STAGE_FAILED, instruction=instruction,
@@ -611,8 +935,16 @@ async def run_stage(run_id: str, stage_id: str, instruction: str = "",
                                {**result.artifact, "skip_reason": result.skip_reason},
                                status=store.STAGE_SKIPPED, **db)
         await store.set_stage_status(run_id, stage_id, store.STAGE_SKIPPED, **db)
+        # Advance past the skipped stage. Without this, a run whose LAST stage
+        # skips itself (embedded: the conditional view) stays "running" forever.
+        nxt = stages.next_after(stage_id, mode)
+        await store.update_run(run_id,
+                               current_stage=nxt.id if nxt else stage_id,
+                               status=store.RUN_RUNNING if nxt else store.RUN_COMPLETE,
+                               **db)
         logger.info("[RUN %s] stage '%s' skipped: %s", run_id, stage_id, result.skip_reason)
-        return {"stage": stage_id, "skipped": True, "reason": result.skip_reason}
+        return {"stage": stage_id, "skipped": True, "reason": result.skip_reason,
+                "next": nxt.id if nxt else None, "complete": nxt is None}
 
     status = store.STAGE_AWAITING if stage.gated else store.STAGE_RUNNING
     await store.save_stage(run_id, stage_id, result.artifact, status=status,
@@ -643,10 +975,11 @@ async def approve_stage(run_id: str, stage_id: str, db_path=None,
                         **kwargs) -> Dict[str, Any]:
     """Approve a stage: fire its writes, record them, and advance."""
     db = {"db_path": db_path} if db_path else {}
-    stage = stages.get(stage_id)
     run = await store.get_run(run_id, **db)
     if not run:
         raise StageError(f"No run '{run_id}'.")
+    mode = run.get("mode") or "standard"
+    stages.get(stage_id, mode)  # unknown-for-this-mode raises before anything fires
 
     result = _PENDING.get((run_id, stage_id))
     if result is None:
@@ -672,7 +1005,7 @@ async def approve_stage(run_id: str, stage_id: str, db_path=None,
                         "error": res.error}
 
     await store.set_stage_status(run_id, stage_id, store.STAGE_APPROVED, **db)
-    nxt = stages.next_after(stage_id)
+    nxt = stages.next_after(stage_id, mode)
     await store.update_run(
         run_id,
         current_stage=nxt.id if nxt else stage_id,
@@ -698,7 +1031,11 @@ async def skip_stage(run_id: str, stage_id: str, reason: str = "",
                      db_path=None) -> Dict[str, Any]:
     """Skip a conditional stage without writing anything."""
     db = {"db_path": db_path} if db_path else {}
-    stage = stages.get(stage_id)
+    run = await store.get_run(run_id, **db)
+    if not run:
+        raise StageError(f"No run '{run_id}'.")
+    mode = run.get("mode") or "standard"
+    stage = stages.get(stage_id, mode)
     if not stage.conditional_on:
         raise StageError(
             f"'{stage.label}' is not a conditional stage and cannot be skipped."
@@ -707,7 +1044,7 @@ async def skip_stage(run_id: str, stage_id: str, reason: str = "",
                            {"skipped_by_user": True, "reason": reason},
                            status=store.STAGE_SKIPPED, **db)
     await store.set_stage_status(run_id, stage_id, store.STAGE_SKIPPED, **db)
-    nxt = stages.next_after(stage_id)
+    nxt = stages.next_after(stage_id, mode)
     await store.update_run(run_id, current_stage=nxt.id if nxt else stage_id,
                            status=store.RUN_RUNNING if nxt else store.RUN_COMPLETE, **db)
     return {"stage": stage_id, "skipped": True, "next": nxt.id if nxt else None}

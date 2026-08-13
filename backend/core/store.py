@@ -149,7 +149,7 @@ async def create_run(user_input: str, mode: str = "standard",
             "INSERT INTO runs (id, created_at, updated_at, user_input, mode, status,"
             " current_stage, dry_run) VALUES (?,?,?,?,?,?,?,?)",
             (run_id, now, now, user_input, mode, RUN_RUNNING,
-             stages.first().id, 1 if dry_run else 0),
+             stages.first(mode).id, 1 if dry_run else 0),
         )
         await db.commit()
     return run_id
@@ -302,8 +302,11 @@ async def run_stages(run_id: str, db_path: Optional[Path] = None) -> List[Dict[s
         if row and row["artifact"]:
             artifacts[needed] = row["artifact"]
 
+    run = await get_run(run_id, db_path=db_path)
+    mode = (run or {}).get("mode") or "standard"
+
     out = []
-    for stage in stages.STAGES:
+    for stage in stages.stage_list(mode):
         seen = latest.get(stage.id)
         out.append({
             "id": stage.id,
@@ -311,7 +314,7 @@ async def run_stages(run_id: str, db_path: Optional[Path] = None) -> List[Dict[s
             "label": stage.label,
             "gated": stage.gated,
             "conditional": bool(stage.conditional_on),
-            "applies": stages.applies(stage.id, artifacts),
+            "applies": stages.applies(stage.id, artifacts, mode),
             "writes_to_qad": bool(stage.writes),
             "status": seen["status"] if seen else "pending",
             "attempts": seen["attempt"] if seen else 0,
@@ -379,8 +382,11 @@ async def can_regenerate(run_id: str, stage_id: str,
       - non-locking   made while rendering a gate, not by approving one.
                       Otherwise opening the deploy dialog would freeze the run.
     """
-    stage = stages.get(stage_id)
-    order = {s.id: i for i, s in enumerate(stages.STAGES)}
+    run = await get_run(run_id, db_path=db_path)
+    mode = (run or {}).get("mode") or "standard"
+    stage = stages.get(stage_id, mode) if stage_id != stages.RECOVERY_STAGE.id \
+        else stages.get(stage_id)
+    order = {s.id: i for i, s in enumerate(stages.stage_list(mode))}
     if stage_id not in order:
         # Recovery stages hang off their host; judge them by the host's position.
         order_index = order.get("fields", 0)
@@ -393,7 +399,7 @@ async def can_regenerate(run_id: str, stage_id: str,
         w_index = order.get(write["stage_id"])
         if w_index is None or w_index < order_index:
             continue
-        blocking_stage = stages.get(write["stage_id"])
+        blocking_stage = stages.get(write["stage_id"], mode)
         if write["stage_id"] == stage_id:
             detail = f"'{stage.label}' has already written to QAD"
         else:

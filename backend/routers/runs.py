@@ -44,10 +44,12 @@ class CreateRun(BaseModel):
 
 class RunStage(BaseModel):
     instruction: str = ""
-    # Stage 4 collects Browse URIs; stage 6 collects lookup configuration.
+    # Stage 4 collects Browse URIs; stage 6 collects lookup configuration; the
+    # embedded requirements gate collects a parent override.
     # Passed straight through to the stage function.
     browse_uris: Optional[Dict[str, str]] = None
     configs: Optional[List[Dict[str, Any]]] = None
+    parent_key: Optional[str] = None
 
 
 class SkipStage(BaseModel):
@@ -62,6 +64,8 @@ def _kwargs(body: RunStage) -> Dict[str, Any]:
         out["browse_uris"] = body.browse_uris
     if body.configs is not None:
         out["configs"] = body.configs
+    if body.parent_key is not None:
+        out["parent_key"] = body.parent_key
     return out
 
 
@@ -94,10 +98,14 @@ async def get_stages() -> Dict[str, Any]:
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_run(body: CreateRun, _=Depends(require_auth)) -> Dict[str, Any]:
+    if body.mode not in stages.MODES:
+        raise HTTPException(status_code=422,
+                            detail=f"Unknown mode '{body.mode}'. "
+                                   f"Known: {', '.join(sorted(stages.MODES))}")
     run_id = await store.create_run(body.user_input, mode=body.mode, dry_run=body.dry_run)
-    logger.info("[RUN %s] created (dry_run=%s)", run_id, body.dry_run)
-    return {"run_id": run_id, "dry_run": body.dry_run,
-            "first_stage": stages.first().id}
+    logger.info("[RUN %s] created (mode=%s, dry_run=%s)", run_id, body.mode, body.dry_run)
+    return {"run_id": run_id, "dry_run": body.dry_run, "mode": body.mode,
+            "first_stage": stages.first(body.mode).id}
 
 
 @router.get("")
@@ -131,8 +139,13 @@ async def get_writes(run_id: str, live_only: bool = False) -> Dict[str, Any]:
 @router.get("/{run_id}/stage/{stage_id}")
 async def get_stage(run_id: str, stage_id: str) -> Dict[str, Any]:
     """The stored artifact for a stage, plus whether it may be regenerated."""
-    await _run_or_404(run_id)
-    stage = _stage_or_404(stage_id)
+    run = await _run_or_404(run_id)
+    # Same-named stages differ between modes (the embedded view is gated, the
+    # standard one is not), so the run's own manifest answers, never a default.
+    try:
+        stage = stages.get(stage_id, run.get("mode") or "standard")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     row = await store.get_stage(run_id, stage_id)
     if not row:
         raise HTTPException(status_code=404,

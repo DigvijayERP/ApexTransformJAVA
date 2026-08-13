@@ -56,6 +56,7 @@ export function StageGate() {
               artifact={gate.artifact ?? {}}
               onBrowseUris={(browse_uris) => run(activeStage, { browse_uris })}
               onConfigure={(configs) => run(activeStage, { configs })}
+              onParentKey={(parent_key) => run(activeStage, { parent_key })}
             />
           </div>
 

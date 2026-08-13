@@ -307,8 +307,12 @@ five AUX parent URNs, the unknowns table moves as follows:
   PurchaseOrderHeaders(DomainCode, PurchaseOrderNumber), Items(DomainCode, ItemCode),
   WorkOrderMasters(DomainCode, WorkOrderNumber, WorkOrderID). Note live entityCodes also differ
   from AUX's keys: `Items`, `WorkOrderMasters`, `InventoryMasters`.
-- **U4/U9/U10 remain** but are now one observation away: EmbeddedExmpl2 is deployed — the owner
-  opening the Items screen and confirming the embedded grid/tab settles them.
+- **U4/U9/U10 SETTLED** (owner confirmation, 2026-08-12): the embedded grid IS visible on the
+  Items screen after the child-only deploy with `isIncludeOnParent: false`. Zero parent-side
+  writes is the complete core flow.
+- **Scope decisions (owner, same day):** the standalone view is IN scope as a conditional,
+  gated, experimentally-flagged stage (U11's experiment now runs at its first live approval);
+  `.p`/`.cls` input is IN scope (parser ported with multi-table support; U15's rework done).
 
 **Captures originally requested (now delivered):**
 1. ~~A Relationship save~~ **DONE** — settles U1, U2, U3, C3.
