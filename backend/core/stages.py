@@ -270,37 +270,43 @@ EMBEDDED_STAGES: List[Stage] = [
         artifact_kind="relation_config",
         locks_upstream=True,
     ),
-    Stage(
-        id="deploy",
-        number=4,
-        label="Deploy",
-        description=(
-            "Show QAD's deployment warnings and the exact deploy payloads, then "
-            "deploy the child on approval. The parent is never redeployed. After "
-            "this, open the parent's screen and refresh: the extension grid and "
-            "tab appear there."
-        ),
-        gated=True,
-        writes=["deploy.check_warnings", "deploy.business_entity"],
-        artifact_kind="deploy_preview",
-        locks_upstream=True,
-    ),
+    # View BEFORE deploy, the order Case 1 proved live (DigOrderTesting
+    # registered its view and then deployed, and the view worked). AUX's
+    # embedded flow put its optional view AFTER deploy, but that step was never
+    # provably exercised, so the weaker precedent lost. Owner's call
+    # 2026-08-13. Deploy stays terminal, which also keeps the regeneration
+    # lock's "nothing after deploy" property.
     Stage(
         id="view",
-        number=5,
+        number=4,
         label="Standalone view",
         description=(
-            "Register a separate menu view for the child. EXPERIMENTAL: the QAD "
-            "training guides say embedded BCs are not menu-accessible, and the "
-            "reference app never provably exercised this. Runs only when you asked "
-            "for a separate view, and the gate shows exactly what would be "
-            "registered."
+            "Register a separate menu view for the child, before deployment, the "
+            "same order the standalone flow uses. EXPERIMENTAL: the QAD training "
+            "guides say embedded BCs are not menu-accessible, and the reference "
+            "app never provably exercised this. Runs only when you asked for a "
+            "separate view, and the gate shows exactly what would be registered."
         ),
         gated=True,
         writes=["view.register"],
         artifact_kind="view_config",
         locks_upstream=True,
         conditional_on="separate_view_wanted",
+    ),
+    Stage(
+        id="deploy",
+        number=5,
+        label="Deploy",
+        description=(
+            "Show QAD's deployment warnings and the exact deploy payloads, then "
+            "deploy the child on approval. Terminal: nothing can be regenerated "
+            "afterwards. The parent is never redeployed. After this, open the "
+            "parent's screen and refresh: the extension grid and tab appear there."
+        ),
+        gated=True,
+        writes=["deploy.check_warnings", "deploy.business_entity"],
+        artifact_kind="deploy_preview",
+        locks_upstream=True,
     ),
 ]
 

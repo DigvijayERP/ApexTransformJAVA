@@ -396,24 +396,28 @@ async def main() -> int:
           rel["uri"].endswith(rel["relationID"]), True)
     check("parent URN from the live-probed registry",
           rel["relatedEntityURI"], "urn:be:com.qad.base.item.IItem")
-    await engine.approve_stage(run4, "relate", **db)
+    res = await engine.approve_stage(run4, "relate", **db)
+    # View sits BEFORE deploy (owner's call 2026-08-13), the order Case 1
+    # proved live; deploy is terminal in both modes.
+    check("relate advances to the view stage", res["next"], "view")
+
+    out = await engine.run_stage(run4, "view", **db)
+    check("unwanted view skips itself", out["skipped"], True)
+    check("the skip names deploy as next", out["next"], "deploy")
 
     out = await engine.run_stage(run4, "deploy", **db)
     check("deploy payload carries our datastore",
           out["artifact"]["payload_preview"]["dataStoreURI"],
           "urn:datastore:com.yash.extension")
     res = await engine.approve_stage(run4, "deploy", **db)
-    check("deploy is NOT terminal in embedded mode", res["next"], "view")
-
-    out = await engine.run_stage(run4, "view", **db)
-    check("unwanted view skips itself", out["skipped"], True)
-    check("and the run completes on that skip",
+    check("deploy is terminal in embedded mode too", res["complete"], True)
+    check("and the run is complete",
           (await store.get_run(run4, **db))["status"], store.RUN_COMPLETE)
 
     listing = await store.run_stages(run4, **db)
     check("the embedded rail has five stages", len(listing), 5)
     check("statuses as run", [s["status"] for s in listing],
-          ["approved", "approved", "approved", "approved", "skipped"])
+          ["approved", "approved", "approved", "skipped", "approved"])
     e_writes = await store.writes_for_run(run4, **db)
     check("four calls rehearsed, in stage order",
           [w["endpoint_id"] for w in e_writes],
