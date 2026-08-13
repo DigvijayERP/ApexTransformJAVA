@@ -935,6 +935,40 @@ view write left nothing behind. The DigPoInspection/DigOrderNote orphaned-browse
 for menu purposes now - the menu view they would have restored cannot exist. Cleanup of those two
 orphaned browses in the QAD UI remains optional tidying.
 
+### 🎉 Server side unblocked: environment healed, jar in hand, API surface CONFIRMED (2026-08-13)
+
+The owner supplied `SERVERSIDE_HANDOFF.md` (1,461 lines) from another session: an unusually honest
+document that labels owner-brief claims as weaker than captures and flags its own shakiest inference.
+It named the environment's HTTP 500s as blocking **all** live JEF work, and the resolved URL shape as
+the first thing to prove. Both were tested immediately, read-only. Full evidence:
+`captures/2026-08-13_jef_live_probe_and_jar.md`.
+
+**The environment is fixed.** All four JEF GETs return 200, including `sse/build-api-sources` (was
+500) and the dependency jar (was "Downloading of core libs failed"). The URL shape
+`{base}/api/qracore/…` with no `/qad-central/` is now **live-verified**, not inferred, and the
+existing `config/endpoints.json` ids resolve with no edits.
+
+**The dependency jar downloads: 3.2 MB, 289 BaseService classes.** All eight BCs this project ever
+created are in it, including `DigSoPacking` from the final Case 2 test. JDK 17 + `javap` are
+available locally, so the surface was inspected directly rather than trusted:
+
+- `fetch` takes **two** args, not the brief's three; `exists` takes **one**, not two;
+  `getEntityURI()` exists and was undocumented.
+- **There is no `…WithConfirmation` split in JEF.** The handoff's scariest open risk (SSS's
+  silent-never-fires trap, I.3) **does not apply**. Overriding `create`/`update` is sufficient.
+- `BaseBC`'s four validation methods confirmed verbatim; logger is slf4j; `@Extension` is a bare
+  marker annotation.
+- `Record` classes expose real Java types (`character`→`String`, `date`→`java.time.LocalDate`) and
+  carry our own SQL-safe renames (`statusCode`). Accessor is `getTt<BC>()` in PascalCase.
+
+**This settles the `discover` stage before it is designed**: a JEF generator reads exact fields,
+types and accessors out of the jar with `javap`, exactly as the SSS pipeline parsed `.d.ts`. No
+inference, no LLM call for structure.
+
+Still unknown, unchanged and all capture-only: the **deploy multipart shape** (the one genuinely
+unproven thing on the critical path), the deploy response body, whether undeploy exists, and whether
+rollback works.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |
