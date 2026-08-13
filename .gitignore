@@ -66,3 +66,6 @@ backend/jef_workspace/
 # Debug leftovers
 debug_run.txt
 *.log
+
+# Proxy capture transcripts are working files, not durable captures.
+captures/proxy_capture_*.md
