@@ -965,9 +965,28 @@ available locally, so the surface was inspected directly rather than trusted:
 types and accessors out of the jar with `javap`, exactly as the SSS pipeline parsed `.d.ts`. No
 inference, no LLM call for structure.
 
-Still unknown, unchanged and all capture-only: the **deploy multipart shape** (the one genuinely
-unproven thing on the critical path), the deploy response body, whether undeploy exists, and whether
-rollback works.
+**The local build pipeline then ran end to end on the owner's machine.** Their workspace
+(`Desktop/Python_Snake/JAVA_SSS/urn_app_com.yash.digwish`, scaffolded 2026-08-04, never built) was
+missing only the dependency jar, which we already had. Installed it, wrote a probe extension against
+`DigSmokeTest`, and `mvn clean package` produced `com.yash.digwish-ext-cust.jar` on the first attempt,
+**BUILD SUCCESS**. The manifest carries `App-Name: com.yash.digwish` and
+`Low-Code-Artifact-Type: extension`, both previously owner-brief-only and absent from the deck.
+
+The real `pom.xml` corrects one handoff inference: the artifactId is
+**`<app_name>-server-side-extension`** (`digwish-server-side-extension`), not `<bc>-…`. The deck's
+n=1 sample was ambiguous because that app's name and BC name were both "training". Also confirmed:
+the extension class's own package is the app package with **no** BC segment
+(`package com.yash.digwish;`), which handoff E.1 listed as NOT KNOWN.
+
+⚠️ Their `.m2` held only `.lastUpdated` markers from 2026-08-11 pointing at Maven Central: exactly the
+poisoned-cache trap (handoff I.2). Cleared before installing, or Maven would have served the cached
+failure.
+
+**Nothing was deployed.** Stages "discover, generate, build" are now all proven locally and are fully
+dry-runnable. The ONLY remaining unknown on the critical path is the **deploy multipart shape**
+(part count, filenames, content types), which no amount of reading settles: it needs one capture of
+the VS Code plugin's Build-and-Deploy. Also still open: the deploy response body, whether undeploy
+exists, and whether rollback works.
 
 ## Deferrals — named, not silently dropped (working rule 6)
 

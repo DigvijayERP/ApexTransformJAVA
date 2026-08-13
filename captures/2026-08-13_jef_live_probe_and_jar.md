@@ -140,7 +140,89 @@ public class DigSmokeTestRecord extends com.qad.ipc.dto.UnmappedPropertiesDTO {
 types, and accessor names for any BC straight out of this jar with `javap`, the same way the SSS
 pipeline parsed `.d.ts`. No guessing, no LLM inference for structure.
 
-## 5. What is still unknown after this probe
+## 5. The local build pipeline, PROVEN END TO END (same day)
+
+The owner's existing workspace at
+`C:\Users\digvijay.parmar\Desktop\Python_Snake\JAVA_SSS\urn_app_com.yash.digwish` was scaffolded
+2026-08-04 but never built: `lib/` empty, no `.java`, `target/` empty. The missing piece was the
+dependency jar, which we already had from section 3. Installed it and built, all local, no QAD writes.
+
+### The real `pom.xml` — confirms the brief, corrects one inference
+
+```xml
+<groupId>com.yash.digwish</groupId>
+<artifactId>digwish-server-side-extension</artifactId>
+<version>1.0-SNAPSHOT</version>
+<properties><java.version>1.8</java.version></properties>
+<dependencies>
+  <dependency><groupId>com.yash.digwish</groupId><artifactId>ext-dependencies</artifactId><version>1.0</version></dependency>
+  <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>2.12.3</version></dependency>
+</dependencies>
+<build>
+  <finalName>com.yash.digwish-ext-cust</finalName>
+  maven-compiler-plugin 3.5.1, source/target 1.8
+  maven-jar-plugin 3.3.0, manifestEntries: App-Name=com.yash.digwish, Low-Code-Artifact-Type=extension
+</build>
+```
+
+**CORRECTION to handoff E.1:** the Maven artifactId is **`<app_name>-server-side-extension`**, not
+`<bc>-server-side-extension`. The deck's `training-server-side-extension` was app
+`com.extensions.training` whose app name IS `training`, so the n=1 sample was ambiguous and was read
+the wrong way. Ours is `digwish-server-side-extension`, and there is no BC named DigWish.
+
+Everything else in the brief is confirmed verbatim: plugin versions, `1.8` target, jackson 2.12.3,
+`finalName`, and both manifest entries.
+
+### Commands run
+
+```bash
+cp qad-ext-dependencies.jar <workspace>/lib/
+mvn install:install-file -Dfile=lib/qad-ext-dependencies.jar \
+    -DgroupId=com.yash.digwish -DartifactId=ext-dependencies -Dversion=1.0 -Dpackaging=jar
+mvn clean package
+```
+
+`.m2/repository/com/yash/digwish/ext-dependencies/1.0/` now holds a real `ext-dependencies-1.0.jar`
+(3,201,580 bytes) and `.pom`. ⚠️ Before this, it held ONLY `.lastUpdated` markers from 2026-08-11
+pointing at Maven Central: the exact poisoned-cache state of handoff trap I.2, which had to be
+cleared first or Maven would serve the cached failure.
+
+### The probe class compiled against the real generated types
+
+`src/main/java/com/yash/digwish/DigSmokeTestValidation.java` extends `DigSmokeTestBaseService`,
+overrides `create`/`update`, iterates `getTtDigSmokeTest()`, calls `addValidationError` +
+`throwAddedValidationErrors()`. Compiled clean on the first attempt: the javap-derived API surface in
+section 4 is accurate.
+
+⚠️ Note `package com.yash.digwish;` — the app package with NO BC segment, while generated types live
+in `com.yash.digwish.digsmoketest`. This matches the brief's reference example and is now confirmed
+to compile. Handoff E.1 listed this as NOT KNOWN (cropped from the deck).
+
+### Output
+
+```
+[INFO] Building jar: …\target\com.yash.digwish-ext-cust.jar
+[INFO] BUILD SUCCESS       (13.6 s, mvn exit 0)
+```
+
+`jar tf` → `com/yash/digwish/DigSmokeTestValidation.class` plus Maven descriptors. **MANIFEST.MF,
+verbatim:**
+
+```
+Manifest-Version: 1.0
+Created-By: Maven JAR Plugin 3.3.0
+Build-Jdk-Spec: 17
+App-Name: com.yash.digwish
+Low-Code-Artifact-Type: extension
+```
+
+Both `App-Name` and `Low-Code-Artifact-Type=extension` confirmed on a real artifact. They were
+owner-brief-only and **absent from the class-6 deck entirely**.
+
+**⚠️ This jar was NOT deployed.** Building is local and free; deploying replaces the whole server-side
+jar with no validated undeploy, and needs an explicit human gate.
+
+## 6. What is still unknown after this probe
 
 Unchanged from the handoff, because none of it is readable:
 
