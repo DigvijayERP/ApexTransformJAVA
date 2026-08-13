@@ -647,7 +647,6 @@ def _e_requirements_artifact(req: Dict[str, Any],
         # The gate renders this as a picker: the LLM proposes, the human
         # disposes. AUX gave the user no say at all (discovery, Stale #10).
         "parent_options": [p.to_dict() for p in pr.offerable()],
-        "wants_separate_view": req.get("wants_separate_view"),
         "abl_tables": (abl or {}).get("tables") or [],
     }
 
@@ -906,30 +905,12 @@ async def stage_e_relate(ctx: Dict[str, Any], instruction: str = "") -> StageRes
     )
 
 
-async def stage_e_view(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
-    if stages.applies("view", ctx, mode="embedded") is False:
-        return StageResult(
-            artifact={"wanted": False},
-            skip=True,
-            skip_reason="No separate view was requested at the requirements stage.",
-        )
-
-    spec = _need(ctx, "fields", "spec")
-    built = build_view_payload(spec, AppIdentity.from_config())
-
-    async def commit(dry_run: bool) -> List[Any]:
-        return [("view.register", await qad_client.call("view.register",
-                                                        payload=built["payload"],
-                                                        dry_run=dry_run))]
-
-    return StageResult(
-        artifact={"summary": built["summary"], "payload_preview": built["payload"]},
-        commit=commit,
-        warnings=["EXPERIMENTAL: the QAD training guides say embedded BCs are not "
-                  "menu-accessible, and the reference app never provably exercised "
-                  "this step. If QAD rejects or the view stays empty, skip it - the "
-                  "embedded grid on the parent is unaffected."],
-    )
+# stage_e_view is GONE, deliberately - not refactored, removed. Three live
+# runs established that the platform forbids a separate menu view for an
+# embedded child in either order (destroyed before deploy; duplicate-rejected
+# after; locked in QAD's UI), which is what the class-3 guide meant by
+# "embedded BCs are not menu-accessible". A stage that cannot succeed is not
+# an experimental feature, it is a trap.
 
 
 RUNNERS = {
@@ -949,7 +930,6 @@ RUNNERS = {
         # Deploy is IDENTICAL to Case 1's: same endpoints, same payloads, same
         # warnings gate - the capture confirms the identity values.
         "deploy": stage_deploy,
-        "view": stage_e_view,
     },
 }
 

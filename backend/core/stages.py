@@ -277,37 +277,32 @@ EMBEDDED_STAGES: List[Stage] = [
     # menu flag OFF; a read-back found our record gone. Standalone deploys
     # generate no views, which is why Case 1's view-then-deploy order works
     # there. AUX's after-deploy step 8 was load-bearing after all.
+    # NO standalone-view stage. Three live runs proved the platform forbids a
+    # separate menu view for an embedded (data-extension-only) child, exactly
+    # as the class-3 guide said ("embedded BCs are not menu-accessible"):
+    #   - registered BEFORE deploy: accepted, then deploy REPLACES it with its
+    #     own form-only, non-menu view (DigPoInspection, DigOrderNote);
+    #   - registered AFTER deploy: rejected, "ViewResourceMetadata already
+    #     exist" - deploy auto-creates the record and the endpoint is
+    #     create-only (DigWoTracking, 2026-08-13);
+    #   - QAD's own UI keeps that auto view locked with the menu flag off.
+    # The child's data lives on the parent's embedded grid and tab; that is
+    # what embedding IS. Possible future designs for standalone visibility
+    # are a named deferral in PROGRESS.md, not a stage that cannot succeed.
     Stage(
         id="deploy",
         number=4,
         label="Deploy",
         description=(
             "Show QAD's deployment warnings and the exact deploy payloads, then "
-            "deploy the child on approval. The parent is never redeployed. After "
-            "this, open the parent's screen and refresh: the extension grid and "
-            "tab appear there."
+            "deploy the child on approval. Terminal. The parent is never "
+            "redeployed. After this, open the parent's screen and refresh: the "
+            "extension grid and tab appear there."
         ),
         gated=True,
         writes=["deploy.check_warnings", "deploy.business_entity"],
         artifact_kind="deploy_preview",
         locks_upstream=True,
-    ),
-    Stage(
-        id="view",
-        number=5,
-        label="Standalone view",
-        description=(
-            "Register a separate menu view for the child. This must run AFTER "
-            "deployment: deploying an embedded BC replaces any earlier view "
-            "registration with its own form-only, non-menu view (observed live "
-            "on this environment). Runs only when you asked for a separate "
-            "view, and the gate shows exactly what will be registered."
-        ),
-        gated=True,
-        writes=["view.register"],
-        artifact_kind="view_config",
-        locks_upstream=True,
-        conditional_on="separate_view_wanted",
     ),
 ]
 
@@ -419,14 +414,6 @@ def applies(stage_id: str, artifacts: Dict[str, Any],
         if not spec:
             return None
         return any(f.get("needsLookup") is True for f in spec.get("fields") or [])
-
-    if stage.conditional_on == "separate_view_wanted":
-        req = artifacts.get("requirements")
-        if req is None:
-            return None
-        # Symmetric with the handler rule: only an explicit False skips, so a
-        # model that forgot the flag leaves the decision with the user.
-        return req.get("wants_separate_view") is not False
 
     return None
 

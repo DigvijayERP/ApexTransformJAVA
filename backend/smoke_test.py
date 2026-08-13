@@ -395,18 +395,16 @@ def main() -> int:
     check("every stage write exists in the registry", sorted(referenced - known), [])
 
     section("17. Embedded manifest (Case 2)")
-    check("five stages", stages.total("embedded"), 5)
-    # View AFTER deploy: the embedded deploy replaces any pre-registered view
-    # with its own form-only, non-menu one (observed live on DigPoInspection,
-    # 2026-08-13).
+    # No view stage at all: three live runs proved the platform forbids a
+    # separate menu view for an embedded child in either order (destroyed
+    # before deploy; duplicate-rejected after; locked in QAD's UI), as the
+    # class-3 guide said. A stage that cannot succeed is a trap, not a feature.
+    check("four stages", stages.total("embedded"), 4)
     check("stage order", [s.id for s in stages.stage_list("embedded")],
-          ["requirements", "fields", "relate", "deploy", "view"])
-    check("the embedded view is GATED, unlike the standard one",
-          stages.get("view", "embedded").gated, True)
-    check("and conditional on the requirements flag",
-          stages.get("view", "embedded").conditional_on, "separate_view_wanted")
-    check("the view survives deploy only by running after it",
-          stages.next_after("deploy", "embedded").id, "view")
+          ["requirements", "fields", "relate", "deploy"])
+    check("no view stage exists in embedded mode",
+          "view" in {s.id for s in stages.stage_list("embedded")}, False)
+    check("deploy is terminal", stages.next_after("deploy", "embedded"), None)
     check("every embedded write exists in the registry",
           sorted({w for s in stages.stage_list("embedded") for w in s.writes} - known), [])
 

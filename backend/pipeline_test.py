@@ -341,8 +341,10 @@ async def main() -> int:
     check("model's parent proposal surfaced", art["parent"]["key"], "Items")
     check("doNotExtend parent is never offered",
           "InventoryMasters" in [p["key"] for p in art["parent_options"]], False)
-    check("view flag carried for the conditional stage",
-          art["wants_separate_view"], False)
+    # No view flag any more: the platform forbids separate menu views for
+    # embedded children, so the artifact no longer carries the dead question.
+    check("no separate-view flag in the artifact",
+          "wants_separate_view" in art, False)
 
     # The gate's parent picker: a deterministic swap, no model call.
     calls_before = len(CALLS)
@@ -397,28 +399,24 @@ async def main() -> int:
     check("parent URN from the live-probed registry",
           rel["relatedEntityURI"], "urn:be:com.qad.base.item.IItem")
     res = await engine.approve_stage(run4, "relate", **db)
-    # View sits AFTER deploy: deploying an embedded child REPLACES any earlier
-    # view registration with its own form-only, non-menu view (observed live,
-    # 2026-08-13, DigPoInspection). Registering afterwards is the only order
-    # in which the menu view survives.
     check("relate advances to deploy", res["next"], "deploy")
 
     out = await engine.run_stage(run4, "deploy", **db)
     check("deploy payload carries our datastore",
           out["artifact"]["payload_preview"]["dataStoreURI"],
           "urn:datastore:com.yash.extension")
+    # No view stage: the platform forbids a separate menu view for an embedded
+    # child in either order (settled live across three runs, 2026-08-13), so
+    # deploy is terminal and the child's data lives on the parent's grid.
     res = await engine.approve_stage(run4, "deploy", **db)
-    check("deploy advances to the post-deploy view", res["next"], "view")
-
-    out = await engine.run_stage(run4, "view", **db)
-    check("unwanted view skips itself", out["skipped"], True)
-    check("and the run completes on that skip",
+    check("deploy is terminal in embedded mode", res["complete"], True)
+    check("and the run is complete",
           (await store.get_run(run4, **db))["status"], store.RUN_COMPLETE)
 
     listing = await store.run_stages(run4, **db)
-    check("the embedded rail has five stages", len(listing), 5)
+    check("the embedded rail has four stages", len(listing), 4)
     check("statuses as run", [s["status"] for s in listing],
-          ["approved", "approved", "approved", "approved", "skipped"])
+          ["approved", "approved", "approved", "approved"])
     e_writes = await store.writes_for_run(run4, **db)
     check("four calls rehearsed, in stage order",
           [w["endpoint_id"] for w in e_writes],
@@ -428,43 +426,44 @@ async def main() -> int:
 
     section("13. Approving out of order is refused, not merely mis-ordered")
     # Regression for the live incident, 2026-08-13: the stage rail lets a user
-    # OPEN any gate freely, so nothing stopped approving "view" (stage 5)
-    # while "deploy" (stage 4) sat open, un-approved. view.register hit the
-    # wire first; deploy.business_entity landed a minute later and replaced
-    # it, exactly the silent-overwrite the stage reorder was meant to prevent.
+    # OPEN any gate freely, so nothing stopped approving a later stage while
+    # an earlier one sat open, un-approved - which is how a view write once
+    # fired before the deploy write and was silently destroyed by it. The
+    # incident's stage pair is gone (the view stage was removed once the
+    # platform rule was settled), so the same shape is driven through
+    # relate/deploy: deploy rendered and approved while relate still waits.
     llm.set_stub(_embedded_stub)
-    run5 = await store.create_run("Extend Items with a shipping note, with a separate view",
+    run5 = await store.create_run("Extend Items with a shipping note",
                                   mode="embedded", dry_run=True, **db)
     await engine.run_stage(run5, "requirements", **db)
     await engine.approve_stage(run5, "requirements", **db)
     await engine.run_stage(run5, "fields", **db)
     await engine.approve_stage(run5, "fields", **db)
-    await engine.run_stage(run5, "relate", **db)
-    await engine.approve_stage(run5, "relate", **db)
 
-    # Deploy is rendered (as the rail's "open" would render it) but NOT yet
-    # approved - the exact state the incident's deploy gate was left in.
+    # Relate is rendered but NOT approved; deploy is rendered too (as the
+    # rail's "open" would), then approved out of turn.
+    await engine.run_stage(run5, "relate", **db)
     await engine.run_stage(run5, "deploy", **db)
-    await engine.run_stage(run5, "view", **db)
     try:
-        await engine.approve_stage(run5, "view", **db)
+        await engine.approve_stage(run5, "deploy", **db)
         check("out-of-order approve raises", False, True)
     except engine.StageError as exc:
-        check("out-of-order approve names the real blocker", "Deploy" in str(exc), True)
+        check("out-of-order approve names the real blocker",
+              "Relate to parent" in str(exc), True)
     check("the blocked write never reached the ledger",
           [w["endpoint_id"] for w in await store.writes_for_run(run5, **db)],
-          ["bc.create", "relation.create", "deploy.check_warnings"])
+          ["bc.create", "deploy.check_warnings"])
 
     # Approving IN order still works after the refusal - the guard does not
     # wedge the run.
+    res = await engine.approve_stage(run5, "relate", **db)
+    check("relate approves normally once it is its own turn", res["approved"], True)
     res = await engine.approve_stage(run5, "deploy", **db)
-    check("deploy approves normally once it is its own turn", res["approved"], True)
-    res = await engine.approve_stage(run5, "view", **db)
-    check("and view approves right after", res["approved"], True)
-    check("this time view.register really did fire",
+    check("and deploy approves right after", res["approved"], True)
+    check("this time deploy.business_entity really did fire",
           [w["endpoint_id"] for w in await store.writes_for_run(run5, **db)],
-          ["bc.create", "relation.create", "deploy.check_warnings",
-           "deploy.business_entity", "view.register"])
+          ["bc.create", "deploy.check_warnings", "relation.create",
+           "deploy.business_entity"])
     llm.set_stub(stub)
 
     print()
@@ -479,7 +478,6 @@ E_REQ = {
     "parent_entity_key": "Items",
     "bc_pascal": "EmbShip",
     "description": "Shipping details per item",
-    "wants_separate_view": False,
     "child_pk": {"code": "EmbShipCode", "dataType": "character"},
     "custom_fields": [
         {"code": "HandlingClass", "dataType": "character"},
@@ -495,10 +493,7 @@ async def _embedded_stub(system: str, user: str, role: str, json_mode: bool) -> 
     if "for an Embedded QAD Business Component pipeline" in opening:
         CALLS.append(opening[:60])
         if opening.startswith("You are a Requirements Gathering Agent"):
-            req = dict(E_REQ)
-            if "separate view" in user.lower():
-                req["wants_separate_view"] = True
-            return json.dumps(req)
+            return json.dumps(E_REQ)
         # The field builder deliberately omits every key field: the engine must
         # rebuild the PK structure itself rather than trust prompt compliance.
         return json.dumps({"status": "ok", "spec": {

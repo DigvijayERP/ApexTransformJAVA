@@ -584,7 +584,7 @@ CRITICAL RULES:
 - You MUST NOT ask questions. Make logical assumptions for anything ambiguous. The user confirms or corrects your parent choice at a review gate, so a wrong guess is recoverable; a question is a dead end.
 - custom_fields must ONLY contain non-PK fields the user wants.
   Do NOT include DomainCode, any parent key field, or the child_pk in custom_fields.
-- wants_separate_view is true ONLY if the user explicitly mentions: separate view, standalone view, menu entry, browse screen, or similar.
+- If the user asks for a separate view, standalone view, menu entry or browse screen, do NOT promise one: embedded Business Components are not menu-accessible on this platform (their data appears on the parent's form as an embedded grid). Note the request in `description` so the review gate can explain, and continue.
 - If ABL source was supplied above, treat its parsed tables as the authoritative field list; the prose then only adds intent the source cannot carry.
 
 OUTPUT: raw JSON only, no markdown, no explanation:
@@ -592,7 +592,6 @@ OUTPUT: raw JSON only, no markdown, no explanation:
   "parent_entity_key": "SalesOrderHeaders",
   "bc_pascal": "ShippingInstructions",
   "description": "Adds shipping and port details to each Sales Order",
-  "wants_separate_view": false,
   "child_pk": { "code": "ShippingInstructionsCode", "dataType": "character" },
   "custom_fields": [
     { "code": "PortOfOrigin",  "dataType": "character" },

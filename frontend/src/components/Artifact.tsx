@@ -367,14 +367,9 @@ function EmbeddedRequirements({ a, onParentKey }: {
               : "none"}
           </li>
           <li>
-            {/* Three states, matching the engine: only an explicit false skips
-                the view stage; absent means it will run and ask. */}
-            Separate standalone view:{" "}
-            {a.wants_separate_view === false
-              ? "no"
-              : a.wants_separate_view
-                ? "yes (experimental)"
-                : "undecided, the view stage will ask"}
+            Where it appears: as an embedded grid and tab on the parent's own
+            screen. The platform does not allow a separate menu view for an
+            embedded component.
           </li>
         </ul>
       </Section>

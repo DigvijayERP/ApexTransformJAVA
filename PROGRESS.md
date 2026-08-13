@@ -898,6 +898,43 @@ manual repair already described for DigPoInspection: delete the orphaned
 `urn:browse:bebrowse:...` browse QAD created from the pre-deploy view registration, then
 re-register the stored `view.register` payload. Held for explicit greenlight per the write rule.
 
+### 🔴 CLOSED: embedded children cannot have a separate menu view. Stage removed (2026-08-13)
+
+The owner's final check (`DigWoTracking` under WorkOrderMasters, run `00bdea94a156`) completed the
+evidence triangle. With the ordering guard holding for the first time (deploy genuinely finished
+before the view gate opened), the post-deploy view.register was **rejected**:
+`ViewResourceMetadata already exist urn:view:meta:...digwotracking urn:view:hybridbrowse:...` —
+the deploy auto-creates the child's view record and the endpoint is create-only.
+
+The full picture, all observed live on this environment:
+1. Register BEFORE deploy → accepted, then deploy REPLACES it with a form-only, non-menu view
+   (DigPoInspection, DigOrderNote).
+2. Register AFTER deploy → rejected as a duplicate of the auto-created record (DigWoTracking).
+3. QAD's own UI keeps that auto view locked, menu flag off (owner's observation).
+4. The class-3 guide said it up front: "embedded BCs are not menu-accessible" (C3:319-321).
+
+My 2026-08-13 morning claim ("registering afterwards is the only order in which the menu view
+survives") is **falsified** — no order survives, because the feature contradicts a platform rule.
+The owner's instinct that the stage ordering "made no sense" was pointing at exactly this. The
+docs were right, both prior orderings were wrong, and AUX's never-exercised step 8 would have
+failed the same way.
+
+**Change:** the standalone-view stage is REMOVED from embedded mode (manifest, runner, conditional,
+prompt contract, artifact, UI copy — all of it). Embedded runs are 4 stages, deploy terminal. The
+requirements prompt now tells the model to note a view request in the description rather than
+promise one, and the gate copy explains where the data actually appears: the parent's grid.
+
+Wins from the same run, all firsts: WorkOrderMasters' THREE PKs mirrored and related live
+(`domainCd` accepted; the multi-PK path is proven), the embedded dropdown two-save wiring ran
+live, the out-of-order approve guard held, and the failed view write locked nothing.
+
+| New deferral | D10 | Standalone visibility for embedded-child data | If ever truly needed: (a) probe updating the auto-created view in place (concurrencyHash contract unproven, UI suggests locked), or (b) redesign as a NON-embedded BC + child relation with isIncludeOnParent, per C3:534 - a different case, not a Case 2 stage | Only if the owner asks for it |
+
+Leftover: `DigWoTracking` in QAD is deployed and healthy (grid on Work Order Master); its failed
+view write left nothing behind. The DigPoInspection/DigOrderNote orphaned-browse repairs are moot
+for menu purposes now - the menu view they would have restored cannot exist. Cleanup of those two
+orphaned browses in the QAD UI remains optional tidying.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |
