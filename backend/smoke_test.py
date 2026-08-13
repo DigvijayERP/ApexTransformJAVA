@@ -396,15 +396,17 @@ def main() -> int:
 
     section("17. Embedded manifest (Case 2)")
     check("five stages", stages.total("embedded"), 5)
-    # View before deploy: the order Case 1 proved live, owner's call 2026-08-13.
+    # View AFTER deploy: the embedded deploy replaces any pre-registered view
+    # with its own form-only, non-menu one (observed live on DigPoInspection,
+    # 2026-08-13).
     check("stage order", [s.id for s in stages.stage_list("embedded")],
-          ["requirements", "fields", "relate", "view", "deploy"])
+          ["requirements", "fields", "relate", "deploy", "view"])
     check("the embedded view is GATED, unlike the standard one",
           stages.get("view", "embedded").gated, True)
     check("and conditional on the requirements flag",
           stages.get("view", "embedded").conditional_on, "separate_view_wanted")
-    check("deploy is terminal in embedded mode too",
-          stages.next_after("deploy", "embedded"), None)
+    check("the view survives deploy only by running after it",
+          stages.next_after("deploy", "embedded").id, "view")
     check("every embedded write exists in the registry",
           sorted({w for s in stages.stage_list("embedded") for w in s.writes} - known), [])
 

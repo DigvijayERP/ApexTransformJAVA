@@ -270,43 +270,44 @@ EMBEDDED_STAGES: List[Stage] = [
         artifact_kind="relation_config",
         locks_upstream=True,
     ),
-    # View BEFORE deploy, the order Case 1 proved live (DigOrderTesting
-    # registered its view and then deployed, and the view worked). AUX's
-    # embedded flow put its optional view AFTER deploy, but that step was never
-    # provably exercised, so the weaker precedent lost. Owner's call
-    # 2026-08-13. Deploy stays terminal, which also keeps the regeneration
-    # lock's "nothing after deploy" property.
+    # View AFTER deploy - settled by live evidence, 2026-08-13, reversing the
+    # same morning's owner-requested reorder. DigPoInspection registered its
+    # hybrid view (accepted, isEligibleForMenu true), then deployed - and the
+    # deploy REPLACED it with an auto-generated Form-Only maint view with the
+    # menu flag OFF; a read-back found our record gone. Standalone deploys
+    # generate no views, which is why Case 1's view-then-deploy order works
+    # there. AUX's after-deploy step 8 was load-bearing after all.
+    Stage(
+        id="deploy",
+        number=4,
+        label="Deploy",
+        description=(
+            "Show QAD's deployment warnings and the exact deploy payloads, then "
+            "deploy the child on approval. The parent is never redeployed. After "
+            "this, open the parent's screen and refresh: the extension grid and "
+            "tab appear there."
+        ),
+        gated=True,
+        writes=["deploy.check_warnings", "deploy.business_entity"],
+        artifact_kind="deploy_preview",
+        locks_upstream=True,
+    ),
     Stage(
         id="view",
-        number=4,
+        number=5,
         label="Standalone view",
         description=(
-            "Register a separate menu view for the child, before deployment, the "
-            "same order the standalone flow uses. EXPERIMENTAL: the QAD training "
-            "guides say embedded BCs are not menu-accessible, and the reference "
-            "app never provably exercised this. Runs only when you asked for a "
-            "separate view, and the gate shows exactly what would be registered."
+            "Register a separate menu view for the child. This must run AFTER "
+            "deployment: deploying an embedded BC replaces any earlier view "
+            "registration with its own form-only, non-menu view (observed live "
+            "on this environment). Runs only when you asked for a separate "
+            "view, and the gate shows exactly what will be registered."
         ),
         gated=True,
         writes=["view.register"],
         artifact_kind="view_config",
         locks_upstream=True,
         conditional_on="separate_view_wanted",
-    ),
-    Stage(
-        id="deploy",
-        number=5,
-        label="Deploy",
-        description=(
-            "Show QAD's deployment warnings and the exact deploy payloads, then "
-            "deploy the child on approval. Terminal: nothing can be regenerated "
-            "afterwards. The parent is never redeployed. After this, open the "
-            "parent's screen and refresh: the extension grid and tab appear there."
-        ),
-        gated=True,
-        writes=["deploy.check_warnings", "deploy.business_entity"],
-        artifact_kind="deploy_preview",
-        locks_upstream=True,
     ),
 ]
 

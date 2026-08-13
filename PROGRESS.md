@@ -831,6 +831,31 @@ Also of note for Case 1: a cold-cache approve (process restart between render an
 LLM stages and can approve an artifact the user never saw. Fixed for embedded requirements;
 the standard-mode stages share the pattern and are a named open item, not fixed here.
 
+### 🔴 SETTLED LIVE: the embedded deploy DESTROYS pre-registered views (2026-08-13)
+
+First live embedded run through the app (`DigPoInspection` under PurchaseOrderHeaders, run
+`d0a684eda73d`) deployed cleanly end to end, but no separate menu entry appeared. Traced with
+read-backs against QAD, not guesses:
+
+- Our view.register was accepted before deploy: `isEligibleForMenu: true`, `typeField:
+  HYBRID_BROWSE`, `urn:view:hybridbrowse:...digpoinspection`, submitResult success.
+- After deploy, a read-back finds that record **gone** (0 rows) and in its place a QAD
+  auto-generated `urn:view:maint:...digPoInspection`, Form-Only, `isEligibleForMenu: false`.
+- Case 1's `DigOrderTesting` still holds OUR record with the flag true, and has no auto maint
+  record: standalone deploys generate no views, embedded deploys do.
+
+**Conclusion: for an embedded child, deployBusinessEntity replaces any earlier view registration
+with its own form-only, non-menu view. A standalone view survives only if registered AFTER
+deploy.** This reverses the same morning's owner-requested view-before-deploy reorder (the Case 1
+precedent it leaned on does not transfer), and vindicates AUX's after-deploy step 8 placement as
+load-bearing rather than cargo. Stage order restored to requirements > fields > relate > deploy >
+view, with the reason recorded in the manifest itself. Also learned in passing: the view
+read-back contract is `GET viewResourceMetadatas?metaURI=...` or `?viewURI=...` (uppercase URI
+params; rows under `data.viewResourceMetadatas`).
+
+Repairing DigPoInspection itself needs one re-POST of the stored view.register request — held for
+the owner's explicit greenlight, per the write rule.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

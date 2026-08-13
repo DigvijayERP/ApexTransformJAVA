@@ -397,27 +397,28 @@ async def main() -> int:
     check("parent URN from the live-probed registry",
           rel["relatedEntityURI"], "urn:be:com.qad.base.item.IItem")
     res = await engine.approve_stage(run4, "relate", **db)
-    # View sits BEFORE deploy (owner's call 2026-08-13), the order Case 1
-    # proved live; deploy is terminal in both modes.
-    check("relate advances to the view stage", res["next"], "view")
-
-    out = await engine.run_stage(run4, "view", **db)
-    check("unwanted view skips itself", out["skipped"], True)
-    check("the skip names deploy as next", out["next"], "deploy")
+    # View sits AFTER deploy: deploying an embedded child REPLACES any earlier
+    # view registration with its own form-only, non-menu view (observed live,
+    # 2026-08-13, DigPoInspection). Registering afterwards is the only order
+    # in which the menu view survives.
+    check("relate advances to deploy", res["next"], "deploy")
 
     out = await engine.run_stage(run4, "deploy", **db)
     check("deploy payload carries our datastore",
           out["artifact"]["payload_preview"]["dataStoreURI"],
           "urn:datastore:com.yash.extension")
     res = await engine.approve_stage(run4, "deploy", **db)
-    check("deploy is terminal in embedded mode too", res["complete"], True)
-    check("and the run is complete",
+    check("deploy advances to the post-deploy view", res["next"], "view")
+
+    out = await engine.run_stage(run4, "view", **db)
+    check("unwanted view skips itself", out["skipped"], True)
+    check("and the run completes on that skip",
           (await store.get_run(run4, **db))["status"], store.RUN_COMPLETE)
 
     listing = await store.run_stages(run4, **db)
     check("the embedded rail has five stages", len(listing), 5)
     check("statuses as run", [s["status"] for s in listing],
-          ["approved", "approved", "approved", "skipped", "approved"])
+          ["approved", "approved", "approved", "approved", "skipped"])
     e_writes = await store.writes_for_run(run4, **db)
     check("four calls rehearsed, in stage order",
           [w["endpoint_id"] for w in e_writes],
