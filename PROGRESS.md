@@ -856,6 +856,48 @@ params; rows under `data.viewResourceMetadatas`).
 Repairing DigPoInspection itself needs one re-POST of the stored view.register request — held for
 the owner's explicit greenlight, per the write rule.
 
+### 🔴 The reorder wasn't enough: stages could still be approved out of order (2026-08-13)
+
+The owner tested the new relate > deploy > view order live (`DigOrderNote` under
+SalesOrderHeaders, run `09a291a7bca5`) and the menu flag was STILL unchecked after deploy,
+describing it as a mystery. It was not QAD behaving inconsistently - it was the SAME failure
+mode from a different cause. Wire timestamps from the write ledger:
+
+```
+08:04:55  relation.create
+08:05:20  deploy.check_warnings   (fires automatically while the deploy gate renders)
+08:05:52  view.register           <- approved here
+08:07:05  deploy.business_entity  <- approved a minute LATER
+```
+
+`view.register` fired before `deploy.business_entity`, despite view being stage 5 and deploy
+stage 4. Root cause: the stage rail's `onClick` opens ANY stage unconditionally
+(`StageRail.tsx:38`), and nothing on the backend enforced that earlier stages must be approved
+before a later one's write fires. The owner opened the view gate while the deploy gate sat open,
+un-approved, and approved it - exactly reproducing the destroy-on-deploy bug the reorder was
+meant to prevent, just via the opposite ordering mistake.
+
+**Fixed at the point that actually matters — where writes fire, not just stage numbering:**
+
+- `engine.approve_stage` now computes `_first_unresolved_stage` (the earliest stage, in the run's
+  mode order, not yet approved or skipped) and refuses to fire a write for any LATER stage,
+  raising a clear `StageError` naming the real blocker. The recovery stage (`fields.autofix`) is
+  exempt - it stands in for its host stage while that host legitimately shows FAILED.
+  Verified: in-order approval, the recovery path, and every existing dry-run flow are unaffected
+  (both suites pass unchanged); a new regression test drives the EXACT incident shape (deploy
+  rendered-not-approved, view rendered, view approved) and confirms it now raises, that the
+  blocked write never reaches the ledger, and that approving in the right order afterward still
+  works normally.
+- `StageGate.tsx` computes the same "first unresolved" boundary client-side and replaces the
+  entire action footer with a locked message and a jump-to-blocker button whenever the open gate
+  is ahead of it - so the confusing state (an Approve button sitting live on an unreachable stage)
+  can no longer be reached by clicking the rail at all, not merely rejected after the click.
+
+**Both `DigPoInspection` and `DigOrderNote` are casualties of this hole** and need the same
+manual repair already described for DigPoInspection: delete the orphaned
+`urn:browse:bebrowse:...` browse QAD created from the pre-deploy view registration, then
+re-register the stored `view.register` payload. Held for explicit greenlight per the write rule.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

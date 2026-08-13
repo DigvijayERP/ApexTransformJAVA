@@ -1030,6 +1030,27 @@ async def run_stage(run_id: str, stage_id: str, instruction: str = "",
 _PENDING: Dict[Any, StageResult] = {}
 
 
+async def _first_unresolved_stage(run_id: str, mode: str, **db) -> Optional[str]:
+    """The first stage, in this mode's order, not yet approved or skipped.
+
+    None means every stage is resolved. Exists to refuse an out-of-order
+    approval: the stage rail lets a user OPEN any stage's gate freely (that is
+    harmless, run_stage writes nothing), but firing ITS WRITE ahead of an
+    earlier stage's write is a different matter. It is exactly how an embedded
+    view lost its menu flag a second time - the deploy gate was left open
+    un-approved while the view gate, reachable from the rail, was approved
+    first. view.register hit the wire, then deploy.business_entity landed
+    afterwards and replaced it, silently, same as before. Order is not merely
+    cosmetic once a later stage's write can invalidate an earlier one's.
+    """
+    for stage in stages.stage_list(mode):
+        row = await store.get_stage(run_id, stage.id, **db)
+        status = row["status"] if row else None
+        if status not in (store.STAGE_APPROVED, store.STAGE_SKIPPED):
+            return stage.id
+    return None
+
+
 async def approve_stage(run_id: str, stage_id: str, db_path=None,
                         **kwargs) -> Dict[str, Any]:
     """Approve a stage: fire its writes, record them, and advance."""
@@ -1039,9 +1060,22 @@ async def approve_stage(run_id: str, stage_id: str, db_path=None,
         raise StageError(f"No run '{run_id}'.")
     mode = run.get("mode") or "standard"
     try:
-        stages.get(stage_id, mode)  # unknown-for-this-mode raises before anything fires
+        stage = stages.get(stage_id, mode)  # unknown-for-this-mode raises before anything fires
     except KeyError as exc:
         raise StageError(str(exc)) from exc
+
+    # The recovery stage is exempt: it stands in for its host ("fields") while
+    # that host shows as FAILED, which is itself "unresolved" - checking would
+    # permanently lock out the one path that recovers from a rejected create.
+    if stage_id != stages.RECOVERY_STAGE.id:
+        blocker = await _first_unresolved_stage(run_id, mode, **db)
+        if blocker is not None and blocker != stage_id:
+            blocker_stage = stages.get(blocker, mode)
+            raise StageError(
+                f"'{blocker_stage.label}' has not been approved yet. Approve stages "
+                f"in order - opening a later gate from the rail does not let its "
+                f"write jump ahead of an earlier one still waiting."
+            )
 
     result = _PENDING.get((run_id, stage_id))
     if result is None:

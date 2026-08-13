@@ -9,7 +9,7 @@ import { useRun } from "../RunContext";
 import { Artifact } from "./Artifact";
 
 export function StageGate() {
-  const { state, stageMeta, run, approve, regenerate, skip } = useRun();
+  const { state, stageMeta, open, run, approve, regenerate, skip } = useRun();
   const { activeStage, gate, busy, run: runRow } = state;
   const [steer, setSteer] = useState("");
 
@@ -21,6 +21,15 @@ export function StageGate() {
   const blocked = gate?.can_regenerate === false;
   const done = status?.status === "approved" || status?.status === "skipped";
   const working = busy !== null;
+
+  // The rail lets a click open ANY stage's gate, approved or not - that is
+  // how an embedded run's "view" write once fired before "deploy" did,
+  // because the deploy gate was simply left open. The server refuses the
+  // approve either way, but naming the real blocker here, before the click,
+  // is what stops it from happening at all rather than erroring after.
+  const firstUnresolved = state.stages.find(
+    (s) => s.status !== "approved" && s.status !== "skipped");
+  const outOfOrder = !done && firstUnresolved != null && firstUnresolved.id !== activeStage;
 
   return (
     <article className="gate">
@@ -35,7 +44,18 @@ export function StageGate() {
         )}
       </header>
 
-      {!gate ? (
+      {outOfOrder ? (
+        <div className="empty">
+          <p className="warn locked">
+            '{stageMeta(firstUnresolved!.id)?.label ?? firstUnresolved!.id}' has not been
+            approved yet. Opening this gate from the rail does not let its write
+            jump ahead of one still waiting - approve stages in order.
+          </p>
+          <button disabled={working} onClick={() => open(firstUnresolved!.id)}>
+            Go to '{stageMeta(firstUnresolved!.id)?.label ?? firstUnresolved!.id}'
+          </button>
+        </div>
+      ) : !gate ? (
         <div className="empty">
           <p>This stage has not run yet.</p>
           <button disabled={working} onClick={() => run(activeStage)}>

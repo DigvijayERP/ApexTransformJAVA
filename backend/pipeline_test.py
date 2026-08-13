@@ -425,6 +425,46 @@ async def main() -> int:
           ["bc.create", "relation.create", "deploy.check_warnings",
            "deploy.business_entity"])
     check("every one a dry run", all(w["dry_run"] for w in e_writes), True)
+
+    section("13. Approving out of order is refused, not merely mis-ordered")
+    # Regression for the live incident, 2026-08-13: the stage rail lets a user
+    # OPEN any gate freely, so nothing stopped approving "view" (stage 5)
+    # while "deploy" (stage 4) sat open, un-approved. view.register hit the
+    # wire first; deploy.business_entity landed a minute later and replaced
+    # it, exactly the silent-overwrite the stage reorder was meant to prevent.
+    llm.set_stub(_embedded_stub)
+    run5 = await store.create_run("Extend Items with a shipping note, with a separate view",
+                                  mode="embedded", dry_run=True, **db)
+    await engine.run_stage(run5, "requirements", **db)
+    await engine.approve_stage(run5, "requirements", **db)
+    await engine.run_stage(run5, "fields", **db)
+    await engine.approve_stage(run5, "fields", **db)
+    await engine.run_stage(run5, "relate", **db)
+    await engine.approve_stage(run5, "relate", **db)
+
+    # Deploy is rendered (as the rail's "open" would render it) but NOT yet
+    # approved - the exact state the incident's deploy gate was left in.
+    await engine.run_stage(run5, "deploy", **db)
+    await engine.run_stage(run5, "view", **db)
+    try:
+        await engine.approve_stage(run5, "view", **db)
+        check("out-of-order approve raises", False, True)
+    except engine.StageError as exc:
+        check("out-of-order approve names the real blocker", "Deploy" in str(exc), True)
+    check("the blocked write never reached the ledger",
+          [w["endpoint_id"] for w in await store.writes_for_run(run5, **db)],
+          ["bc.create", "relation.create", "deploy.check_warnings"])
+
+    # Approving IN order still works after the refusal - the guard does not
+    # wedge the run.
+    res = await engine.approve_stage(run5, "deploy", **db)
+    check("deploy approves normally once it is its own turn", res["approved"], True)
+    res = await engine.approve_stage(run5, "view", **db)
+    check("and view approves right after", res["approved"], True)
+    check("this time view.register really did fire",
+          [w["endpoint_id"] for w in await store.writes_for_run(run5, **db)],
+          ["bc.create", "relation.create", "deploy.check_warnings",
+           "deploy.business_entity", "view.register"])
     llm.set_stub(stub)
 
     print()
@@ -455,7 +495,10 @@ async def _embedded_stub(system: str, user: str, role: str, json_mode: bool) -> 
     if "for an Embedded QAD Business Component pipeline" in opening:
         CALLS.append(opening[:60])
         if opening.startswith("You are a Requirements Gathering Agent"):
-            return json.dumps(E_REQ)
+            req = dict(E_REQ)
+            if "separate view" in user.lower():
+                req["wants_separate_view"] = True
+            return json.dumps(req)
         # The field builder deliberately omits every key field: the engine must
         # rebuild the PK structure itself rather than trust prompt compliance.
         return json.dumps({"status": "ok", "spec": {
