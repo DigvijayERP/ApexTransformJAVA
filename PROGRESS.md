@@ -799,6 +799,38 @@ All three suites green: smoke_test, pipeline_test (embedded end-to-end section 1
 Not yet done: a live embedded run through the app (next session's Test), and the adversarial
 review of this diff which ran before commit.
 
+### Case 2 build reviewed — 11 real defects found and fixed before first run (2026-08-13)
+
+The adversarial review of the build diff half-collapsed: its finder agents produced 17 candidate
+findings, but every verifier died on an API session limit, so the workflow's "all rejected"
+verdict was noise. Each candidate was then verified BY HAND against the source. After
+deduplication, **all 11 distinct findings were real**. Fixed in one pass, suites green:
+
+- **Two conventions, one spec**: the shared view/form builders key PKs off `isPrimary` while the
+  embedded payload uses `primaryKey` ordinals; embedded specs now carry both, so the conditional
+  view stage no longer produces a PK-less view.
+- **The domain mirror is a reserved word**: `sql_safe('DomainCode')` renames to `domainCd`, which
+  is also why the owner's captured UI save used 'DomainCodee'. Codes are now normalized ONCE at
+  the field stage; each mirror records `mapsToParentField`, and the relation maps renamed-child to
+  real-parent instead of assuming the codes match.
+- **Live/file PK coherence**: the spec stores the PK list the mirrors were actually built from
+  (live-verified on live runs), and the relate stage maps that list, never the file registry.
+- **Embedded dropdowns actually work now**: the create had `dataLists: []` (values never reached
+  QAD) and a second-save map in the wrong shape (KeyError after the irreversible create). Both
+  replaced with Case 1's proven `build_data_lists` + `patch_dropdown_fields` machinery.
+- **The stage-run route now honors the regeneration lock** (it silently bypassed it), cross-mode
+  stage ids answer 4xx instead of 500, and a cold-cache approve of embedded requirements reuses
+  the displayed artifact instead of re-rolling the LLM and losing the parent override.
+- **PK-trio hardening**: a custom field the model wrongly marks primary is demoted with a warning
+  instead of silently dropped; the child-PK fallback can no longer collide with a mirror.
+- **Frontend**: the parent picker remounts when regeneration changes the proposed parent (stale
+  choice state), skip advancement uses the server's mode-aware `next`, and an undecided
+  `wants_separate_view` renders as "undecided" instead of "no".
+
+Also of note for Case 1: a cold-cache approve (process restart between render and approve) re-runs
+LLM stages and can approve an artifact the user never saw. Fixed for embedded requirements;
+the standard-mode stages share the pattern and are a named open item, not fixed here.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

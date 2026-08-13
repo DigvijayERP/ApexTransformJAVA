@@ -430,9 +430,11 @@ def main() -> int:
           em["isBusinessDocument"]], [True, True, False])
     check("physical table keeps the xx prefix",
           built["payload"]["entityDeployments"][0]["initialTableName"], "xxcapcheck")
-    check("fieldURI follows the capture shape",
+    # sql_safe applies to hand-built specs too: DomainCode is reserved, so the
+    # builder emits domainCd here (engine-built specs arrive already renamed).
+    check("fieldURI follows the capture shape, sql_safe applied",
           em["entityFields"][0]["fieldURI"],
-          "urn:field:com.yash.digwish.CapCheck.ICapCheck:xxcapcheck.DomainCode")
+          "urn:field:com.yash.digwish.CapCheck.ICapCheck:xxcapcheck.domainCd")
     check("no modelId and no percent-encoding anywhere",
           ["modelId" in json.dumps(built["payload"]),
            "%2E" in json.dumps(built["payload"])], [False, False])
@@ -442,9 +444,15 @@ def main() -> int:
           [True, True, True])
     check("dropdown enters the second-save map keyed by its exact code",
           list(built["field_list_map"]), ["Rating"])
-    check("dropdown stored as character with empty dataListCode at create",
+    # Raw 'dropdown' type with an empty dataListCode at create, then wired by
+    # the second save - the contract Case 1 proved live (DigSmokeTest's status
+    # field; QAD's own picker reports it back as dataType 'dropdown').
+    check("dropdown keeps its type, dataListCode empty until the second save",
           [(f["dataType"], f["dataListCode"]) for f in em["entityFields"]
-           if f["entityFieldCode"] == "Rating"], [("character", "")])
+           if f["entityFieldCode"] == "Rating"], [("dropdown", "")])
+    check("dropdown values ride the create payload as dataLists",
+          [(d["dataListCode"], [v["dataValue"] for v in d["dataListValues"]])
+           for d in em["dataLists"]], [("Rating", ["A", "B"])])
 
     rel = emb.build_relation_payload(e_spec, pr.get("Items"), ident,
                                      relation_id="11111111-2222-3333-4444-555555555555")

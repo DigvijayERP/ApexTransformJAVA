@@ -366,7 +366,16 @@ function EmbeddedRequirements({ a, onParentKey }: {
               ? customs.map((f) => f.code).join(", ")
               : "none"}
           </li>
-          <li>Separate standalone view: {a.wants_separate_view ? "yes (experimental)" : "no"}</li>
+          <li>
+            {/* Three states, matching the engine: only an explicit false skips
+                the view stage; absent means it will run and ask. */}
+            Separate standalone view:{" "}
+            {a.wants_separate_view === false
+              ? "no"
+              : a.wants_separate_view
+                ? "yes (experimental)"
+                : "undecided, the view stage will ask"}
+          </li>
         </ul>
       </Section>
 
@@ -462,7 +471,10 @@ export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKe
     case "lookup_config":   return <LookupConfig a={artifact} onConfigure={onConfigure} />;
     case "deploy_preview":  return <DeployPreview a={artifact} />;
     case "embedded_requirements":
-      return <EmbeddedRequirements a={artifact} onParentKey={onParentKey} />;
+      {/* Keyed by the proposed parent so a regeneration that changes it
+          remounts the picker - otherwise the stale `choice` state shows one
+          parent while Approve approves another. */}
+      return <EmbeddedRequirements key={artifact?.parent?.key ?? ""} a={artifact} onParentKey={onParentKey} />;
     case "relation_config": return <RelationConfig a={artifact} />;
     default:
       // Never drop it. An unrenderable artifact is still a decision the user

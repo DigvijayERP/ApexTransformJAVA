@@ -114,7 +114,15 @@ export function RunProvider({ children }: { children: ReactNode }) {
   const runStage = useCallback(async (stage: string, input: StageInput = {}) => {
     const out = await guard("Working", () => api.runStage(state.runId!, stage, input));
     if (!out) return;
-    if (out.skipped) { await sync(state.runId!); await open(nextOf(state, stage) ?? stage); return; }
+    if (out.skipped) {
+      await sync(state.runId!);
+      // The server names the next stage; it knows the run's mode and manifest.
+      // Recomputing locally was a review finding: the local fallback assumes
+      // the standard stage list and answers wrongly for embedded runs.
+      const next = out.next ?? nextOf(state, stage);
+      if (next) await open(next);
+      return;
+    }
     dispatch({ t: "gate", stage, gate: out });
     await sync(state.runId!);
   }, [guard, open, state, sync]);

@@ -122,6 +122,8 @@ export interface StageRun {
   writes?: string[];
   skipped?: boolean;
   reason?: string;
+  /** On a skip the server names the mode-correct next stage; null = run complete. */
+  next?: string | null;
 }
 
 /** What `GET .../stage/{id}` returns — the stored artifact, after a refresh. */

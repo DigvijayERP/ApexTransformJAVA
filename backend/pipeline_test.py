@@ -358,13 +358,18 @@ async def main() -> int:
     art = out["artifact"]
     # The model deliberately returned NO key fields (see the stub): the PK
     # structure is platform law, so the engine rebuilds it deterministically.
-    check("every parent PK mirrored, in order",
-          art["pk_structure"]["mirrored_parent_pks"], ["DomainCode", "ItemCode"])
+    # 'DomainCode' is SQL-reserved (sql_safe renames it domainCd) - the very
+    # reason the owner's captured UI save named its mirror 'DomainCodee'. The
+    # mirror takes the safe name and REMEMBERS the parent field it maps to.
+    check("every parent PK mirrored, in order, sql_safe applied",
+          art["pk_structure"]["mirrored_parent_pks"], ["domainCd", "ItemCode"])
     check("child PK appended after the mirrors",
           art["pk_structure"]["child_pk"], "EmbShipCode")
     check("field order: mirrors, child PK, customs",
           [f["code"] for f in art["spec"]["fields"]],
-          ["DomainCode", "ItemCode", "EmbShipCode", "HandlingClass", "HazardFlag"])
+          ["domainCd", "ItemCode", "EmbShipCode", "HandlingClass", "HazardFlag"])
+    check("the renamed mirror still knows its parent field",
+          art["spec"]["fields"][0]["mapsToParentField"], "DomainCode")
     check("embedded flags set on the payload",
           art["payload_preview"]["entityMetadatas"][0]["isDataExtensionOnly"], True)
     check("no modelId anywhere (the capture killed it)",
@@ -378,8 +383,10 @@ async def main() -> int:
 
     out = await engine.run_stage(run4, "relate", **db)
     art = out["artifact"]
+    # The mapping connects the RENAMED child mirror to the parent's real field,
+    # the same shape as the capture's DomainCodee -> DomainCode.
     check("relation maps EVERY parent PK", art["summary"]["mappings"],
-          [{"child": "DomainCode", "parent": "DomainCode"},
+          [{"child": "domainCd", "parent": "DomainCode"},
            {"child": "ItemCode", "parent": "ItemCode"}])
     rel = art["payload_preview"]["BERelations"][0]
     check("capture-confirmed flag set", [rel["isExtension"], rel["isEmbedded"],

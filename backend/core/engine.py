@@ -23,7 +23,7 @@ difference is whether the request leaves the process.
 from __future__ import annotations
 
 from dataclasses import dataclass, field as dc_field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import qad_client
 from core import llm, stages, store
@@ -667,6 +667,13 @@ async def stage_e_requirements(ctx: Dict[str, Any], instruction: str = "",
         req["parent_entity_key"] = parent_key
         return StageResult(artifact=_e_requirements_artifact(req, abl))
 
+    # A bare re-run (no steer, no override) reuses what was shown. This is what
+    # keeps a cold-cache approve honest: approve rebuilds through this path
+    # after a process restart, and re-rolling the LLM here would approve an
+    # artifact the user never saw - losing any parent override with it.
+    if prev and not instruction:
+        return StageResult(artifact=_e_requirements_artifact(dict(prev), abl))
+
     user = ctx["user_input"]
     if instruction:
         user = f"{user}\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
@@ -686,43 +693,74 @@ async def stage_e_requirements(ctx: Dict[str, Any], instruction: str = "",
 
 
 def _mirror_parent_pks(spec_fields: List[Dict[str, Any]], pk_fields: List[Dict[str, str]],
-                       child_pk: Dict[str, Any], bc: str) -> List[Dict[str, Any]]:
+                       child_pk: Dict[str, Any], bc: str
+                       ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Enforce the PK trio deterministically, whatever the model returned.
 
     The structure is platform law (the relation must map every parent PK, and
     the child PK must sit outside the FK), so it is not left to prompt
     compliance: mirrors + child PK are REBUILT here and the model's output only
-    contributes the custom fields.
-    """
-    pk_codes = {p["code"] for p in pk_fields}
-    child_code = str(child_pk.get("code") or f"{bc}Code")
-    if child_code in pk_codes:
-        child_code = f"{bc}Code"
+    contributes the custom fields. Returns (fields, warnings).
 
+    Fields carry BOTH PK spellings - `primaryKey` (ordinal, what the embedded
+    payload sends) and `isPrimary` (boolean, what the shared view and form
+    builders key off) - because two consumers with two conventions reading one
+    spec was exactly how the embedded view stage crashed in review.
+    """
+    warns: List[str] = []
+
+    # Every code entering the spec passes sql_safe HERE, once, and every
+    # consumer (entity payload, data lists, relation, view) reads the spec
+    # verbatim afterwards. It matters most for the domain mirror: QAD reserves
+    # 'DomainCode' (sql_safe renames it domainCd), which is why the owner's
+    # captured UI save named its mirror 'DomainCodee'. Each mirror therefore
+    # records the PARENT field it maps to - the relation maps by that, never
+    # by assuming child code == parent code.
     fields: List[Dict[str, Any]] = []
     for i, p in enumerate(pk_fields, start=1):
-        fields.append({"code": p["code"], "label": p["code"],
+        fields.append({"code": naming.sql_safe(p["code"]), "label": p["code"],
                        "dataType": p.get("dataType", "character"),
-                       "primaryKey": i, "isRequired": True})
+                       "primaryKey": i, "isPrimary": True, "isRequired": True,
+                       "mapsToParentField": p["code"]})
+
+    mirror_codes = {f["code"] for f in fields}
+    child_code = naming.sql_safe(
+        str(child_pk.get("code") or f"{bc}Code").strip() or f"{bc}Code")
+    if child_code in mirror_codes:
+        child_code = f"{bc}Code"
+    n = 2
+    while child_code in mirror_codes:
+        child_code = f"{bc}Code{n}"
+        n += 1
     fields.append({"code": child_code, "label": child_code,
                    "dataType": child_pk.get("dataType", "character"),
-                   "primaryKey": len(pk_fields) + 1, "isRequired": True})
+                   "primaryKey": len(pk_fields) + 1, "isPrimary": True,
+                   "isRequired": True})
 
     taken = {f["code"] for f in fields}
     for f in spec_fields:
-        code = str(f.get("code", "")).strip()
-        if not code or code in taken or f.get("isPrimary") or f.get("primaryKey"):
+        code = naming.sql_safe(str(f.get("code", "")).strip())
+        if not code or code in taken:
             continue
+        # A custom field the model wrongly marked primary is DEMOTED, not
+        # dropped - silently losing a field the user asked for is worse than
+        # carrying it as a plain column.
+        if f.get("isPrimary") or f.get("primaryKey"):
+            warns.append(
+                f"The model marked '{code}' as a primary key; only the mirrored "
+                f"parent keys and '{child_code}' may be primary, so it was kept "
+                f"as a regular field.")
         taken.add(code)
         out = {"code": code, "label": f.get("label") or code,
                "dataType": f.get("dataType", "character"),
-               "primaryKey": None, "isRequired": bool(f.get("isRequired"))}
+               "primaryKey": None, "isPrimary": False,
+               "isRequired": bool(f.get("isRequired"))}
         if f.get("dropdownValues"):
             out["dropdownValues"] = f["dropdownValues"]
         if f.get("maxLength") is not None:
             out["maxLength"] = f["maxLength"]
         fields.append(out)
-    return fields
+    return fields, warns
 
 
 async def stage_e_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
@@ -777,12 +815,19 @@ async def stage_e_fields(ctx: Dict[str, Any], instruction: str = "") -> StageRes
     if not bc:
         raise StageError("The model did not return a BC name.")
 
+    mirrored, mirror_warns = _mirror_parent_pks(spec_in.get("fields") or [], pk_fields,
+                                                req.get("child_pk") or {}, bc)
+    warnings.extend(mirror_warns)
     spec = {
         "bc_pascal": bc,
         "description": spec_in.get("description") or req.get("description", ""),
         "parent_key": parent.key,
-        "fields": _mirror_parent_pks(spec_in.get("fields") or [], pk_fields,
-                                     req.get("child_pk") or {}, bc),
+        # The PK list the mirrors were actually built from - live when a live
+        # read succeeded, registry otherwise. The relate stage maps THIS list,
+        # never the file entry, so the relation can not disagree with the
+        # entity that was really created.
+        "parent_pk_fields": pk_fields,
+        "fields": mirrored,
     }
 
     ident = AppIdentity.from_config()
@@ -916,10 +961,24 @@ async def run_stage(run_id: str, stage_id: str, instruction: str = "",
     db = {"db_path": db_path} if db_path else {}
     ctx = await context(run_id, **db)
     mode = ctx["mode"]
-    stage = stages.get(stage_id, mode)
+    # A cross-mode id (form on an embedded run, relate on a standard one) is a
+    # client mistake, not a server fault - surface it as a StageError so the
+    # route answers 4xx instead of 500.
+    try:
+        stage = stages.get(stage_id, mode)
+    except KeyError as exc:
+        raise StageError(str(exc)) from exc
     runner = RUNNERS[mode].get(stage_id)
     if runner is None:
         raise StageError(f"Stage '{stage_id}' has no runner for mode '{mode}'.")
+
+    # The same lock that guards /regenerate. Without it, re-running a stage
+    # through the plain stage route (the parent picker, handler URIs, lookup
+    # configs all use it) would silently step around the one rule that keeps
+    # live writes single-shot.
+    allowed, reason = await store.can_regenerate(run_id, stage_id, **db)
+    if not allowed:
+        raise StageError(reason)
 
     try:
         result = await runner(ctx, instruction=instruction, **kwargs)
@@ -979,7 +1038,10 @@ async def approve_stage(run_id: str, stage_id: str, db_path=None,
     if not run:
         raise StageError(f"No run '{run_id}'.")
     mode = run.get("mode") or "standard"
-    stages.get(stage_id, mode)  # unknown-for-this-mode raises before anything fires
+    try:
+        stages.get(stage_id, mode)  # unknown-for-this-mode raises before anything fires
+    except KeyError as exc:
+        raise StageError(str(exc)) from exc
 
     result = _PENDING.get((run_id, stage_id))
     if result is None:
@@ -1035,7 +1097,10 @@ async def skip_stage(run_id: str, stage_id: str, reason: str = "",
     if not run:
         raise StageError(f"No run '{run_id}'.")
     mode = run.get("mode") or "standard"
-    stage = stages.get(stage_id, mode)
+    try:
+        stage = stages.get(stage_id, mode)
+    except KeyError as exc:
+        raise StageError(str(exc)) from exc
     if not stage.conditional_on:
         raise StageError(
             f"'{stage.label}' is not a conditional stage and cannot be skipped."

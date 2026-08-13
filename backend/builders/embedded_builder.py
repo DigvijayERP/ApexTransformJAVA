@@ -33,6 +33,8 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional
 
+from builders import naming
+from builders.bc_builder import build_data_lists
 from builders.identity import AppIdentity, resolve
 
 # Echoed verbatim from the capture. Reads like server data the UI sends back;
@@ -79,7 +81,13 @@ def physical_table(bc_pascal: str) -> str:
 
 def _entity_field(f: Dict[str, Any], bc: str, table: str,
                   ident: AppIdentity) -> Dict[str, Any]:
-    code = str(f["code"])
+    # Spec codes arrive ALREADY sql_safe'd - the embedded field stage
+    # normalizes once, and every consumer reads the spec verbatim. Re-applying
+    # here is harmless (sql_safe is idempotent) but done for hand-built specs
+    # in tests; the point is it can never DISAGREE with build_data_lists' map
+    # keys, the split that left AUX's reserved-word dropdowns silently unwired
+    # (PHASE0_AUDIT.md:957-958).
+    code = naming.sql_safe(str(f["code"]))
     dt = str(f.get("dataType", "character"))
     is_pk = f.get("primaryKey") is not None
     return {
@@ -89,7 +97,10 @@ def _entity_field(f: Dict[str, Any], bc: str, table: str,
         "physicalFieldName": code,
         "isFormula": False,
         "hasLookup": False,
-        "dataType": "character" if dt.startswith("dropdown") else dt,
+        # Raw type, dropdowns included - the contract Case 1 proved live with
+        # DigSmokeTest's status dropdown (QAD itself reports the field back as
+        # dataType 'dropdown').
+        "dataType": dt,
         "maxLength": f.get("maxLength"),
         "displayFormat": f.get("displayFormat", _DEFAULT_DISPLAY_FORMAT.get(dt, "")),
         "currencyField": "",
@@ -133,26 +144,20 @@ def build_embedded_entity_payload(spec: Dict[str, Any],
 
     fields = [_entity_field(f, bc, table, ident) for f in spec["fields"]]
 
-    # Dropdown second-save map, same contract as Case 1's bc_builder: QAD
-    # assigns dataListCodes at create, the enriched GET is patched and POSTed
-    # back. Keyed by the exact entityFieldCode we sent, sidestepping the
-    # sql_safe key mismatch AUX's embedded flow had (PHASE0_AUDIT.md:957-958).
-    field_list_map: Dict[str, Dict[str, Any]] = {}
-    for f in spec["fields"]:
-        dt = str(f.get("dataType", ""))
-        if dt.startswith("dropdown") and f.get("dropdownValues"):
-            field_list_map[str(f["code"])] = {
-                "values": f["dropdownValues"],
-                "defaultValue": f.get("defaultValue")
-                                 or f["dropdownValues"][0].get("code", ""),
-            }
+    # Dropdowns: EXACTLY Case 1's machinery. build_data_lists emits the
+    # dataLists entries for the create payload AND the {safe_code: {listCode,
+    # defaultValue}} map that patch_dropdown_fields consumes in the second
+    # save. The build's first cut hand-rolled a map in a different shape and
+    # sent dataLists empty, which review caught as two bugs at once: values
+    # never reached QAD, and the second save crashed on the shape mismatch.
+    data_lists, field_list_map = build_data_lists(spec["fields"])
 
     entity_meta = {
         "customData": None,
         "uri": "urn:be:com.qad.qra.app.IApp:",       # verbatim from the capture
         "entityTables": [],
         "entityRelationships": [],
-        "dataLists": [],
+        "dataLists": data_lists,
         "fieldGroups": [],
         "appURI": ident.module_uri,
         "disallowedActions": "",
@@ -251,18 +256,34 @@ def build_relation_payload(spec: Dict[str, Any], parent: Any,
     bc = spec["bc_pascal"]
     rid = relation_id or str(uuid.uuid4())
 
+    # Map the PK list the field stage ACTUALLY mirrored (live-verified when the
+    # run was live), falling back to the registry entry only for specs from
+    # before this key existed. Using the file entry here while the entity was
+    # built from live keys was a review finding: a drifted parent would produce
+    # a relation that disagrees with the deployed child.
+    pk_list = spec.get("parent_pk_fields") or parent.pk_fields
+
+    # A mirror's code may differ from its parent field: sql_safe renames
+    # reserved words, and 'DomainCode' IS one (the capture's child used
+    # 'DomainCodee' -> 'DomainCode' for the same reason). Each spec mirror
+    # carries mapsToParentField, so the mapping is looked up, not assumed.
+    by_parent_field = {f.get("mapsToParentField"): str(f["code"])
+                       for f in spec["fields"] if f.get("mapsToParentField")}
     child_codes = {str(f["code"]) for f in spec["fields"]}
     mappings = []
-    for pk in parent.pk_fields:
+    for pk in pk_list:
         code = pk["code"]
-        if code not in child_codes:
+        source = by_parent_field.get(code) \
+            or (code if code in child_codes else None) \
+            or (naming.sql_safe(code) if naming.sql_safe(code) in child_codes else None)
+        if source is None:
             raise ValueError(
                 f"The child spec has no '{code}' field to map onto the parent's "
                 f"'{code}' primary key. The embedded field stage must mirror every "
                 f"parent PK; parent '{parent.key}' needs: "
-                + ", ".join(p["code"] for p in parent.pk_fields))
+                + ", ".join(p["code"] for p in pk_list))
         mappings.append({
-            "sourceFieldCode": code,
+            "sourceFieldCode": source,
             "relatedFieldCode": code,
             "isSourceFieldLiteral": False,
             "sourceFieldLiteral": None,
