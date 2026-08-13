@@ -68,6 +68,31 @@ _SKIP_RESPONSE_HEADERS = {"connection", "content-length", "transfer-encoding",
                           "content-encoding", "keep-alive"}
 
 
+_SECRET_PARAMS = {"password", "client_secret", "refresh_token", "access_token",
+                  "token", "pwd", "secret"}
+
+
+def _redact_path(path: str) -> str:
+    """Strip credentials out of a URL's query string.
+
+    QAD's OAuth password grant puts username and password in QUERY PARAMETERS,
+    not a body or header, so a proxy that only redacts headers would write the
+    password to disk in clear text. Anything secret-shaped is masked before it
+    reaches the console or the transcript.
+    """
+    head, sep, query = path.partition("?")
+    if not sep:
+        return path
+    out = []
+    for pair in query.split("&"):
+        key, eq, value = pair.partition("=")
+        if key.lower() in _SECRET_PARAMS and value:
+            out.append(f"{key}={eq and ''}<redacted {len(value)} chars>")
+        else:
+            out.append(pair)
+    return head + "?" + "&".join(out)
+
+
 def _redact(headers: Dict[str, str]) -> Dict[str, str]:
     out = {}
     for k, v in headers.items():
@@ -192,12 +217,14 @@ class Handler(BaseHTTPRequestHandler):
         status = f"{resp.status_code}" if resp is not None else f"FAILED {type(err).__name__}"
         ctype = self.headers.get("Content-Type", "")
         flag = "  <<< MULTIPART" if "multipart" in ctype.lower() else ""
-        print(f"[{n:03d}] {method} {self.path[:80]} -> {status}  {elapsed:.2f}s{flag}", flush=True)
+        safe_path = _redact_path(self.path)
+        print(f"[{n:03d}] {method} {safe_path[:80]} -> {status}  {elapsed:.2f}s{flag}", flush=True)
 
         # ── transcript ─────────────────────────────────────────────────────
         parts = [
-            f"\n\n---\n\n## [{n:03d}] {method} {self.path}\n",
-            f"`{started.isoformat()}` &middot; {elapsed:.2f}s &middot; forwarded to `{url}`\n",
+            f"\n\n---\n\n## [{n:03d}] {method} {safe_path}\n",
+            f"`{started.isoformat()}` &middot; {elapsed:.2f}s &middot; forwarded to "
+            f"`{_redact_path(url)}`\n",
             "\n### Request headers\n```\n"
             + "\n".join(f"{k}: {v}" for k, v in _redact(dict(self.headers)).items())
             + "\n```\n",
