@@ -437,3 +437,47 @@ details.writes { margin-top: 16px; }
   margin-left: 6px; font-size: 10px; font-style: normal;
   color: var(--text-muted); text-transform: uppercase;
 }
+
+/* Selection must be unmistakable: the owner could not tell whether a field
+   chip was chosen, and on this screen the choice is load-bearing. */
+/* NO transition on a selectable chip. `.dry-pill` inherits `transition: all
+   0.15s`, and with it the selected state never actually painted: computed
+   style stayed on the pre-transition values indefinitely, so a chosen field
+   looked identical to an unchosen one. That was the owner's exact complaint.
+   Selection feedback should be instantaneous regardless - a 150ms fade on
+   "did my click register?" is the wrong thing to animate. */
+.dry-pill.selectable { cursor: pointer; transition: none; }
+.dry-pill.selectable:hover { border-color: rgba(139, 92, 246, 0.55); color: var(--text); }
+
+/* THREE classes, not two, deliberately. A plain `.dry-pill.on` ties with the
+   dry-run pill's rule further up the file, and after a hot reload the sheets
+   are no longer ordered by source position - so the tie was being resolved
+   against this one and a selected chip looked identical to an unselected one.
+   Specificity decides it regardless of order. */
+.dry-pill.selectable.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.32);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+  font-weight: 600;
+}
+.dry-pill.selectable.on .chip-type { color: var(--text); opacity: 0.8; }
+.pill-mark { font-size: 11px; opacity: 0.9; }
+
+.picked-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-top: 12px; padding: 10px 12px;
+  border: 1px solid rgba(139, 92, 246, 0.4); border-radius: var(--radius-lg);
+  background: var(--pill-bg); font-size: 13px;
+}
+.picked-actions { display: flex; gap: 8px; }
+
+/* Row layout so a tick column keeps names aligned whether or not one is set. */
+.pick-item { flex-direction: row; align-items: center; gap: 10px; }
+.pick-mark { width: 14px; flex: 0 0 14px; color: var(--accent); font-size: 12px; }
+.pick-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pick-body .pick-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Long lists inside a continuously animated card were janky; contain them so a
+   filter keystroke cannot trigger a full-page relayout. */
+.pick-list, .fills { contain: content; }

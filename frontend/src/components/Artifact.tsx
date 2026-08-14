@@ -456,7 +456,7 @@ export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKe
   onBrowseUris?: (v: Record<string, string>) => void;
   onConfigure?: (c: Bag[]) => void;
   onParentKey?: (key: string) => void;
-  onServersidePick?: (v: { bc_name?: string; target_class?: string }) => void;
+  onServersidePick?: (v: { bc_name?: string; target_class?: string; instruction?: string }) => void;
 }) {
   switch (kind) {
     case "text":            return <Text a={artifact} />;
@@ -501,12 +501,30 @@ export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKe
  * QAD's compiled dependency jar, so nothing shown here is inferred.
  */
 
-/** Step 1 — which component, and what rule. */
+/** Step 1 — which component, and what rule.
+ *
+ * Rewritten 2026-08-14 after the owner could not tell what was selected. Three
+ * problems, all of them correctness rather than polish:
+ *
+ *   1. Field chips LOOKED interactive and were not. The whole point of this
+ *      step, ported from AUX, is choosing fields; they are now real toggles
+ *      with an unmistakable selected state.
+ *   2. The component choice is consequential and was easy to miss.
+ *      `PurchaseOrder` and `PurchaseOrderHeader` BOTH have a `remarks` field,
+ *      but only the latter exposes the *WithConfirmation save paths the QAD UI
+ *      actually uses. Picking the wrong one deploys cleanly and never fires,
+ *      so near-identical siblings are now surfaced explicitly.
+ *   3. Rendering ~290 components and ~200 chips at once was slow. Lists are
+ *      capped and report what they are hiding rather than silently truncating.
+ */
 function ServersideTarget({ a, onPick }: {
-  a: Bag; onPick?: (v: { bc_name?: string; target_class?: string }) => void;
+  a: Bag;
+  onPick?: (v: { bc_name?: string; target_class?: string; instruction?: string }) => void;
 }) {
   const [query, setQuery] = useState("");
   const [fieldQuery, setFieldQuery] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [changing, setChanging] = useState(false);
 
   if (a.intent === "delete") {
     const deployed: string[] = a.deployed ?? [];
@@ -518,7 +536,7 @@ function ServersideTarget({ a, onPick }: {
             the whole jar, it then disappears from QAD entirely.
           </p>
         </Section>
-        <Section title={`${deployed.length} validation${deployed.length === 1 ? "" : "s"} recorded as deployed`}>
+        <Section title={`${deployed.length} recorded as deployed`}>
           {deployed.length === 0 ? (
             <p className="warn">
               Nothing is recorded as deployed for this app, so there is nothing to
@@ -527,14 +545,20 @@ function ServersideTarget({ a, onPick }: {
             </p>
           ) : (
             <div className="pick-list" role="listbox">
-              {deployed.map((c) => (
-                <div key={c} role="option" aria-selected={c === a.target_class}
-                     className={"pick-item" + (c === a.target_class ? " active" : "")}
-                     onClick={() => onPick?.({ target_class: c })}>
-                  <span className="pick-name">{c.split(".").pop()}</span>
-                  <span className="pick-meta">{c}</span>
-                </div>
-              ))}
+              {deployed.map((c) => {
+                const on = c === a.target_class;
+                return (
+                  <div key={c} role="option" aria-selected={on}
+                       className={"pick-item" + (on ? " active" : "")}
+                       onClick={() => onPick?.({ target_class: c })}>
+                    <span className="pick-mark">{on ? "✓" : ""}</span>
+                    <span className="pick-body">
+                      <span className="pick-name">{c.split(".").pop()}</span>
+                      <span className="pick-meta">{c}</span>
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </Section>
@@ -546,82 +570,167 @@ function ServersideTarget({ a, onPick }: {
   const fields: Bag[] = bc.fields ?? [];
   const savePaths: Bag[] = (bc.save_paths ?? []).filter((p: Bag) => p.mutating);
   const options: Bag[] = a.component_options ?? [];
-  const shown = options
-    .filter((o) => o.name.toLowerCase().includes(query.toLowerCase()))
-    .slice(0, 60);
-  const visibleFields = fields.filter(
-    (f) => f.name.toLowerCase().includes(fieldQuery.toLowerCase()));
+
+  // Near-identical siblings are the trap: PurchaseOrder vs PurchaseOrderHeader.
+  // Surfaced up front rather than left to be discovered after a silent no-op.
+  const siblings = options.filter(
+    (o) => o.name !== bc.name &&
+      (o.name.startsWith(bc.name) || bc.name.startsWith(o.name)));
+
+  const matches = query.trim()
+    ? options.filter((o) => o.name.toLowerCase().includes(query.trim().toLowerCase()))
+    : options;
+  const shownOptions = matches.slice(0, 25);
+
+  const fieldMatches = fieldQuery.trim()
+    ? fields.filter((f) => f.name.toLowerCase().includes(fieldQuery.trim().toLowerCase()))
+    : fields;
+  const shownFields = fieldMatches.slice(0, 30);
+
+  const toggle = (name: string) =>
+    setPicked((p) => p.includes(name) ? p.filter((x) => x !== name) : [...p, name]);
 
   return (
     <>
-      <Section title="The rule">
-        <p>{a.rule}</p>
-        <ul className="plain">
-          <li>A blocked save will show: <strong>{a.message}</strong></li>
-          <li>Java class: <code>{a.class_name}</code></li>
-        </ul>
+      {/* What is actually selected, stated plainly, before anything else. */}
+      <Section title="Selected">
+        <dl className="pairs">
+          <dt>Component</dt>
+          <dd>
+            <strong>{bc.name}</strong>{" "}
+            <span className="muted">
+              {bc.app_owned ? "created by this app" : "standard QAD"} · <code>{bc.package}</code>
+            </span>
+          </dd>
+          <dt>Rule</dt><dd>{a.rule}</dd>
+          <dt>Blocked save shows</dt><dd><strong>{a.message}</strong></dd>
+          <dt>Java class</dt><dd><code>{a.class_name}</code></dd>
+        </dl>
       </Section>
 
-      <Section title={`Component: ${bc.name}`}>
-        <p className="muted">
-          {bc.app_owned ? "Created by this app." : "A standard QAD component."}{" "}
-          <code>{bc.package}</code>
-        </p>
-        {/* The distinction that decides whether a rule fires at all. */}
-        <p className={bc.has_confirmation_variants ? "warn" : "muted"}>
-          {bc.has_confirmation_variants
-            ? `This component also saves through confirmation methods, so all
-               ${savePaths.length} paths are guarded. Guarding only create and
-               update would deploy cleanly and never fire.`
-            : `${savePaths.length} save paths, all guarded.`}
-        </p>
+      <Section title={`Save paths guarded (${savePaths.length})`}>
         <div className="fills">
           {savePaths.map((p: Bag) => (
-            <span key={p.name} className="dry-pill">{p.name}</span>
+            <span key={p.name} className="dry-pill on">✓ {p.name}</span>
           ))}
         </div>
+        <p className={bc.has_confirmation_variants ? "muted" : "warn"}>
+          {bc.has_confirmation_variants
+            ? "This component also saves through confirmation methods, and all of them are covered."
+            : "This component exposes no confirmation variants. If the QAD screen for it saves through one, the rule would never fire — check the sibling components below."}
+        </p>
       </Section>
 
-      {options.length > 0 && (
-        <Section title="Target a different component">
-          <label className="field">
-            <span>Search {options.length} components</span>
-            <input value={query} placeholder="purchase, sales, item…"
-                   onChange={(e) => setQuery(e.target.value)} />
-          </label>
+      {siblings.length > 0 && (
+        <Section title="Similarly named components">
+          <p className="warn">
+            {siblings.length === 1 ? "There is another component" : "There are other components"}{" "}
+            with a near-identical name. They are different business components with
+            different save paths, and only one drives the screen you mean.
+          </p>
           <div className="pick-list" role="listbox">
-            {shown.map((o) => (
-              <div key={`${o.package}.${o.name}`} role="option"
-                   aria-selected={o.name === bc.name}
-                   className={"pick-item" + (o.name === bc.name ? " active" : "")}
+            {siblings.map((o) => (
+              <div key={`${o.package}.${o.name}`} role="option" aria-selected={false}
+                   className="pick-item"
                    onClick={() => onPick?.({ bc_name: o.name })}>
-                <span className="pick-name">{o.name}</span>
-                <span className="pick-meta">{o.app_owned ? "app" : "QAD"} · {o.package}</span>
+                <span className="pick-mark" />
+                <span className="pick-body">
+                  <span className="pick-name">{o.name}</span>
+                  <span className="pick-meta">use this instead · {o.package}</span>
+                </span>
               </div>
             ))}
           </div>
         </Section>
       )}
 
-      <Section title={`Fields you can check (${fields.length})`}>
+      <Section title="Fields">
         <p className="muted">
-          Read from the compiled component, with their real Java types. Naming a
-          field in the rule is enough; the types are what keep the generated code
-          correct.
+          Read from the compiled component with their real Java types. Select the
+          ones the rule is about, or just leave it: the rule above already names them.
         </p>
         <label className="field">
-          <span>Filter</span>
+          <span>Filter {fields.length} fields</span>
           <input value={fieldQuery} placeholder="remarks, date, status…"
                  onChange={(e) => setFieldQuery(e.target.value)} />
         </label>
         <div className="fills">
-          {visibleFields.slice(0, 120).map((f: Bag) => (
-            <span key={f.name} className="dry-pill" title={`${f.getter}() returns ${f.type}`}>
-              {f.name}<em className="chip-type">{f.type}</em>
-            </span>
-          ))}
-          {visibleFields.length === 0 && <span className="muted">No field matches.</span>}
+          {shownFields.map((f: Bag) => {
+            const on = picked.includes(f.name);
+            return (
+              <button type="button" key={f.name}
+                      className={"dry-pill selectable" + (on ? " on" : "")}
+                      aria-pressed={on}
+                      title={`${f.getter}() returns ${f.type}`}
+                      onClick={() => toggle(f.name)}>
+                <span className="pill-mark">{on ? "✓" : "+"}</span>
+                {f.name}<em className="chip-type">{f.type}</em>
+              </button>
+            );
+          })}
         </div>
+        {fieldMatches.length > shownFields.length && (
+          <p className="muted">
+            Showing {shownFields.length} of {fieldMatches.length}. Filter to narrow.
+          </p>
+        )}
+        {fieldMatches.length === 0 && <p className="muted">No field matches.</p>}
+
+        {picked.length > 0 && (
+          <div className="picked-bar">
+            <span>
+              <strong>{picked.length} selected:</strong> {picked.join(", ")}
+            </span>
+            <span className="picked-actions">
+              <button className="ghost" onClick={() => setPicked([])}>Clear</button>
+              {onPick && (
+                <button className="primary" onClick={() => onPick({
+                  instruction: `The rule concerns these fields specifically: ${picked.join(", ")}.`,
+                })}>
+                  Rewrite the rule around these
+                </button>
+              )}
+            </span>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Target a different component">
+        {!changing ? (
+          <button className="ghost" onClick={() => setChanging(true)}>
+            Change component ({options.length} available)
+          </button>
+        ) : (
+          <>
+            <label className="field">
+              <span>Search {options.length} components</span>
+              <input autoFocus value={query} placeholder="purchase, sales, item…"
+                     onChange={(e) => setQuery(e.target.value)} />
+            </label>
+            <div className="pick-list" role="listbox">
+              {shownOptions.map((o) => {
+                const on = o.name === bc.name;
+                return (
+                  <div key={`${o.package}.${o.name}`} role="option" aria-selected={on}
+                       className={"pick-item" + (on ? " active" : "")}
+                       onClick={() => { setChanging(false); onPick?.({ bc_name: o.name }); }}>
+                    <span className="pick-mark">{on ? "✓" : ""}</span>
+                    <span className="pick-body">
+                      <span className="pick-name">{o.name}</span>
+                      <span className="pick-meta">{o.app_owned ? "app" : "QAD"} · {o.package}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {matches.length > shownOptions.length && (
+              <p className="muted">
+                Showing {shownOptions.length} of {matches.length}. Type to narrow.
+              </p>
+            )}
+            {matches.length === 0 && <p className="muted">Nothing matches “{query}”.</p>}
+          </>
+        )}
       </Section>
     </>
   );
