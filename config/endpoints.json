@@ -1,7 +1,7 @@
 {
   "_readme": [
     "Phase 1 endpoint registry. Every QAD endpoint any step calls, segregated by",
-    "phase/case. Nothing here is hardcoded in application code \u2014 code resolves an",
+    "phase/case. Nothing here is hardcoded in application code — code resolves an",
     "endpoint by its `id`.",
     "",
     "`source` cites where each entry was READ FROM, so no entry is taken on trust:",
@@ -24,11 +24,11 @@
       "(aux_web_version/backend/qad_client.py:57,:65) where its base is a bare",
       "host:port. The Adaptive base URL already carries its context root",
       "(.../clouderp), so `clouderp` occupies the same slot `qad-central` does.",
-      "Adaptive therefore needs NO extra prefix \u2014 matching the confirmed JEF",
+      "Adaptive therefore needs NO extra prefix — matching the confirmed JEF",
       "contract's {envUrl}api/qracore/... form. context_root is a setting, not a",
       "literal, precisely so this never has to be guessed again.",
       "",
-      "context_root is DELIBERATELY ABSENT HERE \u2014 it is per-environment and lives",
+      "context_root is DELIBERATELY ABSENT HERE — it is per-environment and lives",
       "only in config/environment.json. Defining it in two files would be the same",
       "drift defect the audit flagged in AUX's duplicated step tables."
     ],
@@ -52,7 +52,7 @@
             "password": "{password}",
             "grant_type": "password"
           },
-          "notes": "Credentials travel in the QUERY STRING, not a JSON body. AUX does not URL-encode the password (aux_web_version/backend/qad_client.py:42-53) \u2014 Adaptive must.",
+          "notes": "Credentials travel in the QUERY STRING, not a JSON body. AUX does not URL-encode the password (aux_web_version/backend/qad_client.py:42-53) — Adaptive must.",
           "classification": "static",
           "source": "aux_web_version/backend/qad_client.py:44",
           "status": "confirmed"
@@ -67,7 +67,7 @@
             "grant_type": "refresh_token",
             "refresh_token": "{refresh_token}"
           },
-          "notes": "NOT implemented in AUX \u2014 AUX has no token cache and no 401 retry. Included because the JEF contract confirms it and Phase 2's long-lived gated runs will need it.",
+          "notes": "NOT implemented in AUX — AUX has no token cache and no 401 retry. Included because the JEF contract confirms it and Phase 2's long-lived gated runs will need it.",
           "classification": "static",
           "source": "BRIEF/jef-contract",
           "status": "confirmed"
@@ -75,7 +75,7 @@
       ]
     },
     "case1_new_bc": {
-      "_comment": "New business component from scratch. Step numbers are AUX's current numbering; see QUESTIONS.md Q-D \u2014 two work units below have no step identity and will get sub-step ids in Phase 2.",
+      "_comment": "New business component from scratch. Step numbers are AUX's current numbering; see QUESTIONS.md Q-D — two work units below have no step identity and will get sub-step ids in Phase 2.",
       "endpoints": [
         {
           "id": "bc.create",
@@ -94,14 +94,14 @@
         {
           "id": "bc.metadata.read",
           "step": "3a",
-          "label": "Dropdown wiring \u2014 read enriched metadata",
+          "label": "Dropdown wiring — read enriched metadata",
           "method": "GET",
           "path": "entitymetadatas",
           "query": {
             "entityURI": "{entity_uri}",
             "viewUri": "urn:be:com.qad.qra.adapter.entity.IEntityBuilderCRUD"
           },
-          "notes": "QAD's Entity Builder needs two saves: GET the enriched metadata, mutate, POST it back. Emits under step 3 today \u2014 no identity of its own (Q-D).",
+          "notes": "QAD's Entity Builder needs two saves: GET the enriched metadata, mutate, POST it back. Emits under step 3 today — no identity of its own (Q-D).",
           "classification": "static",
           "source": "aux_web_version/backend/pipeline.py:516",
           "status": "confirmed"
@@ -109,14 +109,14 @@
         {
           "id": "bc.metadata.write",
           "step": "3a",
-          "label": "Dropdown wiring \u2014 write data-list back",
+          "label": "Dropdown wiring — write data-list back",
           "method": "POST",
           "path": "entitymetadatas",
           "query": {
             "entityURI": "{entity_uri}",
             "viewUri": "urn:be:com.qad.qra.adapter.entity.IEntityBuilderCRUD"
           },
-          "notes": "Hard-fails the run on error \u2014 exactly the kind of step a human gate should show.",
+          "notes": "Hard-fails the run on error — exactly the kind of step a human gate should show.",
           "classification": "static",
           "source": "aux_web_version/backend/pipeline.py:529",
           "status": "confirmed"
@@ -128,7 +128,7 @@
           "method": "POST",
           "path": "viewMetadataV2",
           "query": {},
-          "notes": "No query parameters \u2014 bare endpoint.",
+          "notes": "No query parameters — bare endpoint.",
           "classification": "static",
           "source": "aux_web_version/backend/pipeline.py:597",
           "status": "confirmed"
@@ -140,7 +140,7 @@
           "method": "POST",
           "path": "eventhandler",
           "query": {},
-          "notes": "AUX hardcodes eventHandlerType=BEFORE and appliesTo=WEB in the PAYLOAD (prompts.py:259). Phase 5 needs these parameterised \u2014 four base classes and three timings, per PHASE0_SUMMARY.md.",
+          "notes": "AUX hardcodes eventHandlerType=BEFORE and appliesTo=WEB in the PAYLOAD (prompts.py:259). Phase 5 needs these parameterised — four base classes and three timings, per PHASE0_SUMMARY.md.",
           "classification": "static",
           "source": "aux_web_version/backend/pipeline.py:685",
           "status": "confirmed"
@@ -167,7 +167,7 @@
           "query": {
             "viewUri": "urn:be:com.qad.qra.lookup.ILookup"
           },
-          "notes": "NEVER REACHED in AUX \u2014 the live path is behind a dry_run guard. Emits frames with no step/total/name keys at all (Q-D).",
+          "notes": "NEVER REACHED in AUX — the live path is behind a dry_run guard. Emits frames with no step/total/name keys at all (Q-D).",
           "classification": "static",
           "source": "aux_web_version/backend/core/lookup_generator.py:70",
           "status": "confirmed"
@@ -175,11 +175,11 @@
         {
           "id": "deploy.check_warnings",
           "step": 14,
-          "label": "Deploy \u2014 check for warnings",
+          "label": "Deploy — check for warnings",
           "method": "POST",
           "path": "deployCheckForWarnings",
           "query": {},
-          "notes": "AUX DISCARDS this response \u2014 never assigned, never checked (pipeline.py:739). Adaptive must surface it at the Phase 4 gate.",
+          "notes": "AUX DISCARDS this response — never assigned, never checked (pipeline.py:739). Adaptive must surface it at the Phase 4 gate.",
           "classification": "static",
           "source": "aux_web_version/backend/pipeline.py:739",
           "status": "confirmed"
@@ -217,7 +217,7 @@
       ]
     },
     "case2_embedded": {
-      "_comment": "Embedded BC. Shares bc.create / bc.metadata.* / deploy.* with case 1 \u2014 same endpoints, different call sites. Only the endpoints UNIQUE to this case are listed here.",
+      "_comment": "Embedded BC. Shares bc.create / bc.metadata.* / deploy.* with case 1 — same endpoints, different call sites. Only the endpoints UNIQUE to this case are listed here.",
       "shares_from_case1": [
         "bc.create",
         "bc.metadata.read",
@@ -244,7 +244,7 @@
       ]
     },
     "case3_serverside_jef": {
-      "_comment": "Server-side, Phase 6. Adaptive uses JEF (Java/Maven). AUX's SSS endpoint is recorded under `not_ported` below and is NOT carried across \u2014 decision 6 of the brief.",
+      "_comment": "Server-side, Phase 6. Adaptive uses JEF (Java/Maven). AUX's SSS endpoint is recorded under `not_ported` below and is NOT carried across — decision 6 of the brief.",
       "endpoints": [
         {
           "id": "jef.apps.list",
@@ -267,7 +267,7 @@
           "query": {
             "appURI": "{app_uri}"
           },
-          "notes": "Returns application/java-archive. Currently FAILS on the Adaptive environment ('Downloading of core libs failed') \u2014 see PROGRESS.md deferral D5.",
+          "notes": "Returns application/java-archive. Currently FAILS on the Adaptive environment ('Downloading of core libs failed') — see PROGRESS.md deferral D5.",
           "classification": "static",
           "source": "BRIEF/jef-contract",
           "status": "confirmed"
@@ -280,10 +280,10 @@
           "query": {
             "appURI": "{app_uri}"
           },
-          "notes": "multipart/form-data, form field name `files`. Success judged ONLY on HTTP .ok \u2014 no submitResult envelope. WHOLE-JAR REPLACEMENT: deploying from an incomplete copy silently erases everything not in that copy. No undeploy command exists.",
+          "notes": "CONFIRMED LIVE 2026-08-14 (captures/2026-08-13_jef_live_probe_and_jar.md section 6). multipart/form-data with EXACTLY ONE part: form field name \"files\", filename set to the jar name (com.yash.digwish-ext-cust.jar), part Content-Type application/java-archive. Bearer auth, no cookie, no Expect: 100-continue. Success response is HTTP 200 with an EMPTY body (content-length: 0) - there is NO submitResult envelope, so judge success on the HTTP status alone. Failure modes remain unobserved: treat any non-2xx as failure and surface the raw status and body. NOTE the VS Code plugin fails on this environment with \"socket hang up\"; our own client works, so do not depend on the plugin.",
           "classification": "static",
-          "source": "BRIEF/jef-contract",
-          "status": "confirmed"
+          "source": "captures/2026-08-13_jef_live_probe_and_jar.md (live POST, HTTP 200)",
+          "status": "captured"
         },
         {
           "id": "jef.developer_settings",
@@ -303,7 +303,7 @@
           "query": {
             "appURI": "{app_uri}"
           },
-          "notes": "UI-only, not in plugin 1.0.10. Currently returns HTTP 500 on the Adaptive environment \u2014 deferral D5.",
+          "notes": "UI-only, not in plugin 1.0.10. Currently returns HTTP 500 on the Adaptive environment — deferral D5.",
           "classification": "static",
           "source": "BRIEF/jef-contract",
           "status": "confirmed"
@@ -311,7 +311,7 @@
       ]
     },
     "phase5_event_handlers": {
-      "_comment": "Phase 5 \u2014 embedded event handlers on the parent BC. The read path below is the single most valuable artefact recovered in Phase 0: it is an EXISTING, in-repo read-back of a handler on a QAD-STANDARD parent view.",
+      "_comment": "Phase 5 — embedded event handlers on the parent BC. The read path below is the single most valuable artefact recovered in Phase 0: it is an EXISTING, in-repo read-back of a handler on a QAD-STANDARD parent view.",
       "endpoints": [
         {
           "id": "eventhandler.read",
@@ -324,7 +324,7 @@
             "eventHandlerType": "{timing}",
             "appliesTo": "WEB"
           },
-          "notes": "NOTE THE CASING: viewURI here, but viewUri on the entity endpoints. Response is data.eventHandlerV2s[] \u2014 an ARRAY, so 'exactly one row per 4-tuple' is INFERRED, not confirmed (VERIFICATION_ROUND2.md, B1 flag 7). Carries `concurrencyHash`, the optimistic-locking token that makes read-modify-write possible. eventHandlerType is BEFORE | AFTER | PRIMARY.",
+          "notes": "NOTE THE CASING: viewURI here, but viewUri on the entity endpoints. Response is data.eventHandlerV2s[] — an ARRAY, so 'exactly one row per 4-tuple' is INFERRED, not confirmed (VERIFICATION_ROUND2.md, B1 flag 7). Carries `concurrencyHash`, the optimistic-locking token that makes read-modify-write possible. eventHandlerType is BEFORE | AFTER | PRIMARY.",
           "classification": "static",
           "source": "aux_web_version/backend/probe_parent_eh.py:44-51",
           "status": "confirmed-in-code-never-executed"
@@ -335,7 +335,7 @@
           "method": "POST",
           "path": "eventhandler",
           "query": {},
-          "notes": "Payload echoes `uri` + `concurrencyHash` from the read. NEVER RUN \u2014 this is a WRITE against a standard QAD parent view and needs explicit greenlight (QUESTIONS.md Q-L). Phase 5's chosen strategy is a NEW Pre/Post handler, which does not need this at all.",
+          "notes": "Payload echoes `uri` + `concurrencyHash` from the read. NEVER RUN — this is a WRITE against a standard QAD parent view and needs explicit greenlight (QUESTIONS.md Q-L). Phase 5's chosen strategy is a NEW Pre/Post handler, which does not need this at all.",
           "classification": "static",
           "source": "aux_web_version/backend/probe_parent_eh.py:74-91",
           "status": "confirmed-in-code-never-executed"
@@ -344,7 +344,7 @@
     }
   },
   "not_ported": {
-    "_comment": "Recorded so it is a NAMED deferral, not a silent omission (working rule 6). AUX keeps SSS; Adaptive uses JEF. Not a toggle \u2014 decision 6 of the brief.",
+    "_comment": "Recorded so it is a NAMED deferral, not a silent omission (working rule 6). AUX keeps SSS; Adaptive uses JEF. Not a toggle — decision 6 of the brief.",
     "endpoints": [
       {
         "id": "sss.deploy",
@@ -357,7 +357,7 @@
           "appSeq": "0",
           "fileSeq": "3"
         },
-        "notes": "appSeq=0 and fileSeq=3 are UNEXPLAINED LITERALS copied verbatim from the VS Code extension \u2014 nothing in the AUX repo derives them. Moot for Adaptive: JEF replaces this path entirely.",
+        "notes": "appSeq=0 and fileSeq=3 are UNEXPLAINED LITERALS copied verbatim from the VS Code extension — nothing in the AUX repo derives them. Moot for Adaptive: JEF replaces this path entirely.",
         "classification": "static",
         "source": "aux_web_version/backend/sss/deploy.py:37-45",
         "status": "confirmed"

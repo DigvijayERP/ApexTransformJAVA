@@ -988,6 +988,54 @@ dry-runnable. The ONLY remaining unknown on the critical path is the **deploy mu
 the VS Code plugin's Build-and-Deploy. Also still open: the deploy response body, whether undeploy
 exists, and whether rollback works.
 
+### 🎉 THE JEF DEPLOY CONTRACT IS SETTLED — and the plugin is not needed (2026-08-14)
+
+The last unknown on the server-side critical path. **Not captured from the plugin: constructed and
+sent directly, and QAD accepted it.** Full detail in
+`captures/2026-08-13_jef_live_probe_and_jar.md` section 6.
+
+The plugin's own deploy **fails on this machine** — `mvn` succeeds, then
+`socket hang up` on the upload POST. Non-mutating probes showed the route is fine (`OPTIONS` → 200,
+`allow: POST,OPTIONS`), so the fault is the plugin's Node HTTP layer, not QAD. Rather than keep
+chasing a capture of a request that never completes, the POST was built from the brief's contract
+and sent with this project's own client:
+
+```
+POST …/api/qracore/sse/upload-packages?appURI=urn:app:com.yash.digwish
+Authorization: Bearer <token>
+multipart/form-data, ONE part:
+    name="files"; filename="com.yash.digwish-ext-cust.jar"
+    Content-Type: application/java-archive   (3,321 bytes)
+
+→ HTTP 200, content-length: 0, EMPTY body
+```
+
+**What it settles.** Part count (one), the `filename`, and the part content type were all NOT KNOWN
+and are now known. Success is judged on the HTTP status alone: the body is empty, there is **no
+`submitResult` envelope**, so the BC-style business-error check does not apply. Bearer auth is
+sufficient; no cookie, no `Expect: 100-continue`. `jef.deploy` in the registry is upgraded from
+`BRIEF/jef-contract, confirmed` to **`captured`**.
+
+**The strategic result: Adaptive can deploy Java extensions without the VS Code plugin at all.**
+Since the plugin cannot deploy on this environment, that is not a convenience, it is the only
+working path.
+
+**Still unproven, and named rather than assumed:** (1) what a REJECTED deploy looks like — no
+failure mode has been observed, so the deploy stage must treat any non-2xx as failure and surface
+the raw status and body instead of pattern-matching; (2) whether the extension actually FIRES. A 200
+proves QAD accepted an upload, nothing more, and the SSS precedent is a rule that deploys cleanly
+and silently never runs. That needs a behavioural test.
+
+⚠️ Incidental: `Init app` was run mid-session and created a SECOND, empty scaffold at
+`Desktop/Python_Snake/urn_app_com.yash.digwish`. Harmless but dangerous — deploying from it would
+upload a jar with no classes, and deploy is whole-jar replacement. The real workspace is
+`Desktop/Python_Snake/JAVA_SSS/urn_app_com.yash.digwish`.
+
+⚠️ Security note: the capture proxy initially logged the OAuth password grant's query string and the
+token response body, both of which carry credentials. Caught, transcript scrubbed, and the proxy now
+redacts secrets in query strings AND bodies. The transcripts were gitignored from the start and were
+never committed.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

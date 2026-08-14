@@ -222,7 +222,78 @@ owner-brief-only and **absent from the class-6 deck entirely**.
 **⚠️ This jar was NOT deployed.** Building is local and free; deploying replaces the whole server-side
 jar with no validated undeploy, and needs an explicit human gate.
 
-## 6. What is still unknown after this probe
+## 6. 🎉 THE DEPLOY CONTRACT, SETTLED LIVE (2026-08-14)
+
+The last unknown on the JEF critical path. Not captured from the plugin: **constructed and sent
+directly**, which is a stronger result because it means the app never needs the plugin to deploy.
+
+### Background: the plugin cannot deploy on this machine
+
+The owner ran `QAD Extension: Build and Deploy` twice. `mvn clean package` succeeded both times
+(BUILD SUCCESS, jar written), then the plugin failed at the network step:
+
+```
+request to https://eeadaptive.yash.com:33005/clouderp/api/qracore/sse/upload-packages
+  ?appURI=urn:app:com.yash.digwish failed, reason: socket hang up
+```
+
+Non-mutating probes proved the route itself is healthy:
+
+| Method | Result |
+|---|---|
+| `OPTIONS` | **200**, `allow: POST,OPTIONS` |
+| `GET` / `HEAD` | 500 (wrong method) |
+
+So the endpoint exists and accepts POST. `socket hang up` is the plugin's own HTTP layer
+(a Node client failing an upload, classically an unanswered `Expect: 100-continue`), **not QAD**.
+⚠️ Consequence: on this environment the plugin is unreliable for deploys. Our own client is not.
+
+### The request that worked, verbatim
+
+```
+POST https://eeadaptive.yash.com:33005/clouderp/api/qracore/sse/upload-packages
+     ?appURI=urn%3Aapp%3Acom.yash.digwish
+Authorization: Bearer <token>
+Content-Type: multipart/form-data; boundary=<generated>
+
+--<boundary>
+Content-Disposition: form-data; name="files"; filename="com.yash.digwish-ext-cust.jar"
+Content-Type: application/java-archive
+
+<3,321 bytes of jar>
+--<boundary>--
+```
+
+### The response
+
+```
+HTTP 200
+server: nginx
+content-length: 0
+(empty body)
+```
+
+### What this settles
+
+- **The multipart shape is CONFIRMED**: exactly ONE part, form field name `files`, `filename` set
+  to the jar's own name, part content type `application/java-archive`. The brief said field name
+  `files`; part count, filename and content type were NOT KNOWN and are now known.
+- **Success is judged on the HTTP status alone.** The response body is **empty**, `content-length: 0`.
+  There is no `submitResult` envelope, confirming the brief's ".ok only" rule and confirming that
+  the BC-style `submitResult.success:false` business-error check does NOT apply here.
+- **No `Expect: 100-continue` is needed**, and no cookie: Bearer auth is sufficient.
+- **The app can deploy without the VS Code plugin at all.** Given the plugin fails on this machine,
+  that is not merely a convenience: it is the only working path.
+
+⚠️ Still NOT established: what a REJECTED deploy looks like (a malformed jar, a wrong appURI, a
+missing manifest key). Every failure mode remains unobserved, so error handling in the deploy stage
+must treat any non-2xx as a failure and surface the raw status and body rather than pattern-match.
+
+⚠️ Also still unestablished: whether the extension actually FIRES. A 200 proves QAD accepted the
+upload, nothing more. The SSS precedent (a rule that deploys cleanly and silently never runs) is
+exactly why this needs a behavioural test, not a status code.
+
+## 7. What is still unknown after this probe
 
 Unchanged from the handoff, because none of it is readable:
 
