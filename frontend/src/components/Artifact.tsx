@@ -449,12 +449,14 @@ function RelationConfig({ a }: { a: Bag }) {
 }
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
-export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKey }: {
+export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKey,
+                          onServersidePick }: {
   kind: ArtifactKind | undefined;
   artifact: Bag;
   onBrowseUris?: (v: Record<string, string>) => void;
   onConfigure?: (c: Bag[]) => void;
   onParentKey?: (key: string) => void;
+  onServersidePick?: (v: { bc_name?: string; target_class?: string }) => void;
 }) {
   switch (kind) {
     case "text":            return <Text a={artifact} />;
@@ -471,6 +473,14 @@ export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKe
           parent while Approve approves another. */}
       return <EmbeddedRequirements key={artifact?.parent?.key ?? ""} a={artifact} onParentKey={onParentKey} />;
     case "relation_config": return <RelationConfig a={artifact} />;
+    case "serverside_target":
+      // Keyed by the chosen component so regenerating to a different one
+      // remounts the picker instead of showing stale selection state.
+      return <ServersideTarget key={artifact?.bc?.name ?? artifact?.intent ?? ""}
+                               a={artifact} onPick={onServersidePick} />;
+    case "serverside_code":   return <ServersideCode a={artifact} />;
+    case "serverside_build":  return <ServersideBuild a={artifact} />;
+    case "serverside_deploy": return <ServersideDeploy a={artifact} />;
     default:
       // Never drop it. An unrenderable artifact is still a decision the user
       // is being asked to make.
@@ -481,4 +491,248 @@ export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKe
         </>
       );
   }
+}
+
+/* ── Case 3: server-side Java extensions ─────────────────────────────────────
+ *
+ * The three-step shape AUX used for its server-side rules (pick a component,
+ * see its fields, describe the rule) with one thing it never had: the
+ * component list, the field names AND their real Java types all come from
+ * QAD's compiled dependency jar, so nothing shown here is inferred.
+ */
+
+/** Step 1 — which component, and what rule. */
+function ServersideTarget({ a, onPick }: {
+  a: Bag; onPick?: (v: { bc_name?: string; target_class?: string }) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [fieldQuery, setFieldQuery] = useState("");
+
+  if (a.intent === "delete") {
+    const deployed: string[] = a.deployed ?? [];
+    return (
+      <>
+        <Section title="Remove a validation">
+          <p className="muted">
+            Removing rebuilds the jar without that class. Because a deploy replaces
+            the whole jar, it then disappears from QAD entirely.
+          </p>
+        </Section>
+        <Section title={`${deployed.length} validation${deployed.length === 1 ? "" : "s"} recorded as deployed`}>
+          {deployed.length === 0 ? (
+            <p className="warn">
+              Nothing is recorded as deployed for this app, so there is nothing to
+              remove here. If a validation was deployed by other means this app has
+              no record of it: QAD cannot be asked what is currently live.
+            </p>
+          ) : (
+            <div className="pick-list" role="listbox">
+              {deployed.map((c) => (
+                <div key={c} role="option" aria-selected={c === a.target_class}
+                     className={"pick-item" + (c === a.target_class ? " active" : "")}
+                     onClick={() => onPick?.({ target_class: c })}>
+                  <span className="pick-name">{c.split(".").pop()}</span>
+                  <span className="pick-meta">{c}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      </>
+    );
+  }
+
+  const bc: Bag = a.bc ?? {};
+  const fields: Bag[] = bc.fields ?? [];
+  const savePaths: Bag[] = (bc.save_paths ?? []).filter((p: Bag) => p.mutating);
+  const options: Bag[] = a.component_options ?? [];
+  const shown = options
+    .filter((o) => o.name.toLowerCase().includes(query.toLowerCase()))
+    .slice(0, 60);
+  const visibleFields = fields.filter(
+    (f) => f.name.toLowerCase().includes(fieldQuery.toLowerCase()));
+
+  return (
+    <>
+      <Section title="The rule">
+        <p>{a.rule}</p>
+        <ul className="plain">
+          <li>A blocked save will show: <strong>{a.message}</strong></li>
+          <li>Java class: <code>{a.class_name}</code></li>
+        </ul>
+      </Section>
+
+      <Section title={`Component: ${bc.name}`}>
+        <p className="muted">
+          {bc.app_owned ? "Created by this app." : "A standard QAD component."}{" "}
+          <code>{bc.package}</code>
+        </p>
+        {/* The distinction that decides whether a rule fires at all. */}
+        <p className={bc.has_confirmation_variants ? "warn" : "muted"}>
+          {bc.has_confirmation_variants
+            ? `This component also saves through confirmation methods, so all
+               ${savePaths.length} paths are guarded. Guarding only create and
+               update would deploy cleanly and never fire.`
+            : `${savePaths.length} save paths, all guarded.`}
+        </p>
+        <div className="fills">
+          {savePaths.map((p: Bag) => (
+            <span key={p.name} className="dry-pill">{p.name}</span>
+          ))}
+        </div>
+      </Section>
+
+      {options.length > 0 && (
+        <Section title="Target a different component">
+          <label className="field">
+            <span>Search {options.length} components</span>
+            <input value={query} placeholder="purchase, sales, item…"
+                   onChange={(e) => setQuery(e.target.value)} />
+          </label>
+          <div className="pick-list" role="listbox">
+            {shown.map((o) => (
+              <div key={`${o.package}.${o.name}`} role="option"
+                   aria-selected={o.name === bc.name}
+                   className={"pick-item" + (o.name === bc.name ? " active" : "")}
+                   onClick={() => onPick?.({ bc_name: o.name })}>
+                <span className="pick-name">{o.name}</span>
+                <span className="pick-meta">{o.app_owned ? "app" : "QAD"} · {o.package}</span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      <Section title={`Fields you can check (${fields.length})`}>
+        <p className="muted">
+          Read from the compiled component, with their real Java types. Naming a
+          field in the rule is enough; the types are what keep the generated code
+          correct.
+        </p>
+        <label className="field">
+          <span>Filter</span>
+          <input value={fieldQuery} placeholder="remarks, date, status…"
+                 onChange={(e) => setFieldQuery(e.target.value)} />
+        </label>
+        <div className="fills">
+          {visibleFields.slice(0, 120).map((f: Bag) => (
+            <span key={f.name} className="dry-pill" title={`${f.getter}() returns ${f.type}`}>
+              {f.name}<em className="chip-type">{f.type}</em>
+            </span>
+          ))}
+          {visibleFields.length === 0 && <span className="muted">No field matches.</span>}
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/** Step 2 — the Java itself. */
+function ServersideCode({ a }: { a: Bag }) {
+  if (a.intent === "delete") {
+    const remaining: string[] = a.remaining_after ?? [];
+    return (
+      <>
+        <Section title="Will be removed">
+          <p><code>{a.class_name}</code></p>
+          <p className="muted">Source file: <code>{a.relative_path}</code></p>
+        </Section>
+        <Section title={`${remaining.length} will remain`}>
+          {remaining.length
+            ? <ul className="plain">{remaining.map((c) => <li key={c}><code>{c}</code></li>)}</ul>
+            : <p className="muted">None. The app will have no server-side validations.</p>}
+        </Section>
+      </>
+    );
+  }
+  const s: Bag = a.summary ?? {};
+  return (
+    <>
+      <Section title={a.class_name}>
+        <ul className="plain">
+          <li>Guards: {(s.guarded_paths ?? []).join(", ")}</li>
+          <li>A blocked save will show: <strong>{a.message}</strong></li>
+        </ul>
+      </Section>
+      <Section title="Java source">
+        <pre className="code">{a.source}</pre>
+      </Section>
+    </>
+  );
+}
+
+/** Step 3 — the compiler's verdict. Local only; nothing has been sent. */
+function ServersideBuild({ a }: { a: Bag }) {
+  const b: Bag = a.build ?? {};
+  const classes: string[] = b.classes ?? [];
+  const errors: string[] = b.compile_errors ?? [];
+  return (
+    <>
+      <Section title={b.ok ? "Compiled" : "Compile failed"}>
+        <p className="muted">
+          Maven ran over the whole workspace. Nothing was sent to QAD: this proves
+          the code compiles against QAD's real types before anything is uploaded.
+        </p>
+        {errors.length > 0 && (
+          <ul className="plain">
+            {errors.map((e, i) => <li key={i} className="warn">{e}</li>)}
+          </ul>
+        )}
+      </Section>
+      <Section title={`${classes.length} class${classes.length === 1 ? "" : "es"} in the jar`}>
+        <ul className="plain">{classes.map((c) => <li key={c}><code>{c}</code></li>)}</ul>
+        <p className="muted">{b.jar_bytes} bytes</p>
+      </Section>
+    </>
+  );
+}
+
+/** Step 4 — the only stage that writes. */
+function ServersideDeploy({ a }: { a: Bag }) {
+  const p: Bag = a.plan ?? {};
+  const after: string[] = p.classes_after_deploy ?? [];
+  const removed: string[] = p.removed ?? [];
+  const added: string[] = p.added ?? [];
+  return (
+    <>
+      {removed.length > 0 && (
+        <Section title="This deploy DELETES">
+          <ul className="plain">
+            {removed.map((c) => <li key={c} className="warn"><code>{c}</code></li>)}
+          </ul>
+          <p className="warn">
+            Uploading replaces the entire jar, so these stop working the moment it
+            succeeds. QAD reports success either way and gives no warning.
+          </p>
+        </Section>
+      )}
+
+      <Section title={`Afterwards, ${after.length} extension${after.length === 1 ? "" : "s"} will be live`}>
+        {/* The FULL list, not a diff: under whole-jar replacement this IS the
+            deployment. */}
+        <ul className="plain">
+          {after.map((c) => (
+            <li key={c}>
+              <code>{c}</code>{added.includes(c) && <em className="tag"> new</em>}
+            </li>
+          ))}
+        </ul>
+        {!p.previously_deployed_known && (
+          <p className="warn">
+            This app has no recorded successful deploy, so what is live right now is
+            unknown: QAD cannot be asked. Anything deployed by other means will be
+            replaced by this upload.
+          </p>
+        )}
+      </Section>
+
+      <Section title="Exact request">
+        <ul className="plain">
+          <li>POST <code>{p.url}</code></li>
+          <li>multipart field <code>{p.part_field_name}</code>, filename <code>{p.part_filename}</code></li>
+          <li>{p.part_content_type} · {p.jar_bytes} bytes</li>
+        </ul>
+      </Section>
+    </>
+  );
 }

@@ -129,6 +129,18 @@ def app_uri() -> str:
     return str(_active_env().get("app_uri", ""))
 
 
+def jef_workspace_dir() -> Optional[Path]:
+    """Where the Java extension project lives, or None if unset.
+
+    The folder CONTAINING pom.xml, lib/, src/ and config/ - the one the VS Code
+    plugin names urn_app_<fullAppName>. It is a real, external, shared folder
+    that outlives any run and may hold hand-written classes, which is why it is
+    a setting rather than something this app creates and owns.
+    """
+    raw = str(_secret("JEF_WORKSPACE_DIR", "")).strip()
+    return Path(raw).expanduser() if raw else None
+
+
 def context_root() -> str:
     return str(_active_env().get("context_root", "")).strip("/")
 

@@ -44,9 +44,11 @@ const post = <T,>(path: string, body?: unknown) =>
 export type ArtifactKind =
   | "text" | "field_spec" | "field_spec_diff" | "form_layout"
   | "handler_code" | "view_config" | "lookup_config" | "deploy_preview"
-  | "embedded_requirements" | "relation_config";
+  | "embedded_requirements" | "relation_config"
+  | "serverside_target" | "serverside_code" | "serverside_build"
+  | "serverside_deploy";
 
-export type RunMode = "standard" | "embedded";
+export type RunMode = "standard" | "embedded" | "serverside";
 
 export interface Stage {
   id: string;
@@ -160,6 +162,13 @@ export interface StageInput {
   configs?: Record<string, any>[];
   /** Embedded requirements gate: override the LLM's parent choice. */
   parent_key?: string;
+  /** Server-side target gate: override the component, or name the validation
+   *  to remove. Explicit, like parent_key, because each is one deterministic
+   *  override the gate offers by name. */
+  bc_name?: string;
+  target_class?: string;
+  /** Server-side code gate: hand-edited Java, taken verbatim. */
+  source?: string;
 }
 
 // ── The API ──────────────────────────────────────────────────────────────────

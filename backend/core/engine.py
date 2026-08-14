@@ -25,8 +25,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from pathlib import Path
+
 import qad_client
-from core import llm, stages, store
+from core import config, llm, stages, store
 from core.logging_setup import get_logger
 from builders import event_handler_builder as ehb
 from builders import lookup_builder as lkb
@@ -913,6 +915,300 @@ async def stage_e_relate(ctx: Dict[str, Any], instruction: str = "") -> StageRes
 # an experimental feature, it is a trap.
 
 
+# ── Case 3: server-side Java extensions ──────────────────────────────────────
+def _workspace():
+    """The JEF workspace, or a StageError explaining how to set it."""
+    from core import maven
+    root = config.jef_workspace_dir()
+    if not root:
+        raise StageError(
+            "JEF_WORKSPACE_DIR is not set. Point it at the Java extension project - "
+            "the folder containing pom.xml, created by the VS Code plugin's "
+            "'QAD Extension: Init app' and named urn_app_<fullAppName>.")
+    ws = maven.Workspace(root)
+    problems = ws.problems()
+    if problems:
+        raise StageError(" ".join(problems))
+    return ws
+
+
+async def _dependency_jar(ws) -> Any:
+    """The dependency jar, fetched from QAD if the workspace lacks it.
+
+    A GET whose only side effect is a local file, so it needs no gate - the
+    same reasoning that lets the lookup stage read QAD's field picker while
+    merely rendering.
+    """
+    from core import jef_deploy, maven
+    jar = ws.lib / maven.DEPENDENCY_JAR_NAME
+    if jar.is_file():
+        return jar
+    logger.info("[JEF] no dependency jar in %s; fetching from QAD", ws.lib)
+    try:
+        return await jef_deploy.fetch_dependency_jar(jar)
+    except jef_deploy.JefDeployError as exc:
+        raise StageError(
+            f"{exc} The jar holds the generated Java for every business component, "
+            f"so nothing can be generated without it.") from exc
+
+
+async def stage_s_target(ctx: Dict[str, Any], instruction: str = "",
+                         bc_name: str = "", target_class: str = "") -> StageResult:
+    """Pick the component and state the rule. Reads the jar; writes nothing."""
+    from agents import prompts
+    from core import jar_inspector as ji, jef_deploy
+
+    ws = _workspace()
+    jar = await _dependency_jar(ws)
+    db = (ctx.get("_db") or {}).get("db_path")
+
+    # A choice made at the gate is a deterministic swap, not a reason to
+    # re-roll the model and approve something the user never saw.
+    prev = (ctx.get("target") or {}).get("decision")
+    if prev and (bc_name or target_class or not instruction):
+        decision = dict(prev)
+        if bc_name:
+            decision["bc_name"] = bc_name
+        if target_class:
+            decision["target_class"] = target_class
+        return StageResult(artifact=await _s_target_artifact(decision, jar, ws, db))
+
+    components = ji.list_components(jar)
+    menu = "\n".join(
+        f"{c.name} - {c.package} - {'app' if c.is_app_owned else 'QAD'}"
+        for c in components)
+    live = await jef_deploy.live_classes(db_path=db)
+    deployed_menu = "\n".join(live) if live else "(none recorded)"
+
+    user = ctx["user_input"]
+    if instruction:
+        user = f"{user}\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
+
+    raw = await llm.complete(
+        prompts.render(prompts.SERVERSIDE_TARGET,
+                       tokens={"COMPONENT_MENU": menu, "DEPLOYED_MENU": deployed_menu}),
+        user, role="planning", json_mode=True)
+    decision = llm.parse_json(raw)
+    if not isinstance(decision, dict):
+        raise StageError("The model did not return a usable target decision.")
+    if bc_name:
+        decision["bc_name"] = bc_name
+    if target_class:
+        decision["target_class"] = target_class
+    return StageResult(artifact=await _s_target_artifact(decision, jar, ws, db))
+
+
+async def _s_target_artifact(decision: Dict[str, Any], jar: Any, ws: Any,
+                             db: Any = None) -> Dict[str, Any]:
+    from core import jar_inspector as ji, jef_deploy
+
+    intent = "delete" if str(decision.get("intent", "")).lower() == "delete" else "create"
+    out: Dict[str, Any] = {
+        "decision": decision,
+        "intent": intent,
+        "workspace": str(ws.root),
+        "jar": str(jar),
+    }
+
+    if intent == "delete":
+        live = await jef_deploy.live_classes(db_path=db)
+        out["deployed"] = live or []
+        out["deployed_known"] = live is not None
+        out["target_class"] = decision.get("target_class") or ""
+        return out
+
+    # Create: resolve the component so the gate can show its REAL fields and
+    # the save paths that will actually be guarded.
+    bc = ji.inspect(jar, str(decision.get("bc_name", "")))
+    out["bc"] = bc.summary()
+    out["class_name"] = decision.get("class_name") or f"{bc.name}Validation"
+    out["rule"] = decision.get("rule", "")
+    out["message"] = decision.get("message", "")
+    out["component_options"] = [
+        {"name": c.name, "package": c.package, "app_owned": c.is_app_owned}
+        for c in ji.list_components(jar)
+    ]
+    return out
+
+
+async def stage_s_code(ctx: Dict[str, Any], instruction: str = "",
+                       source: str = "") -> StageResult:
+    """Write the class, or name the one to remove. Touches only local disk."""
+    from agents import prompts
+    from core import jar_inspector as ji
+    from builders import extension_builder as xb
+
+    target = ctx.get("target") or {}
+    if not target:
+        raise StageError("Run and approve the target stage first.")
+    ws = _workspace()
+
+    if target.get("intent") == "delete":
+        wanted = target.get("target_class") or ""
+        live = target.get("deployed") or []
+        if wanted not in live:
+            raise StageError(
+                f"'{wanted or '(nothing chosen)'}' is not among the validations recorded "
+                f"as deployed for this app: {', '.join(live) or '(none)'}. Choose one of "
+                f"those at the target gate, or start a create instead.")
+        rel = wanted.replace(".", "/") + ".java"
+        present = (ws.source_root / rel).is_file()
+        return StageResult(
+            artifact={
+                "intent": "delete",
+                "class_name": wanted,
+                "relative_path": rel,
+                "source_present": present,
+                "remaining_after": [c for c in live if c != wanted],
+            },
+            warnings=[] if present else [
+                f"{rel} is not in the workspace, so there is no local source to remove. "
+                f"The class still disappears from QAD on the next deploy, because the "
+                f"jar is built from what IS in the workspace."],
+        )
+
+    bc = ji.inspect(Path(target["jar"]), target["bc"]["name"])
+    class_name = target.get("class_name") or f"{bc.name}Validation"
+    rel = f"{config.app_identity()['module'].replace('.', '/')}/{class_name}.java"
+
+    if source.strip():
+        # Edited by hand at the gate. Take it verbatim - editing is the point of
+        # an editable gate - but it still has to compile at the next stage.
+        return StageResult(
+            artifact={"intent": "create", "class_name": class_name,
+                      "relative_path": rel, "source": source,
+                      "summary": {"bc": bc.name, "class_name": class_name,
+                                  "edited_by_user": True},
+                      "message": target.get("message", "")},
+            warnings=["This source was edited by hand, so the generator's save-path "
+                      "coverage checks no longer describe it."],
+        )
+
+    field_table = "\n".join(
+        f"  {f.getter}() -> {f.simple_type}" for f in bc.fields) or "  (none)"
+    user = f"Component: {bc.name}\nRule: {target.get('rule', '')}"
+    if instruction:
+        user += f"\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
+
+    body = _strip_fences(await llm.complete(
+        prompts.render(prompts.SERVERSIDE_VALIDATION_BODY,
+                       tokens={"FIELD_TABLE": field_table,
+                               "RULE": target.get("rule", ""),
+                               "MESSAGE": target.get("message", "")}),
+        user, role="generation"))
+
+    built = xb.build_extension_source(bc, xb.ValidationSpec(
+        class_name=class_name,
+        description=target.get("rule", "") or f"Validation on {bc.name}.",
+        body=body))
+    return StageResult(
+        artifact={
+            "intent": "create",
+            "class_name": class_name,
+            "relative_path": built["relative_path"],
+            "source": built["source"],
+            "summary": built["summary"],
+            "message": target.get("message", ""),
+        },
+        warnings=built["warnings"],
+    )
+
+
+def _strip_fences(text: str) -> str:
+    """Models wrap code in fences however firmly they are told not to."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        t = "\n".join(lines[1:])
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[: t.rstrip().rfind("```")]
+    return t.strip()
+
+
+async def stage_s_build(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    """Put the source in the workspace and compile it. No QAD contact at all.
+
+    The highest-value rehearsal in the case: javac is a free and exact reviewer
+    of the model's work, and it has already caught a real type error here.
+    """
+    from core import maven
+
+    code = ctx.get("code") or {}
+    if not code:
+        raise StageError("Run and approve the code stage first.")
+    ws = _workspace()
+
+    if code.get("intent") == "delete":
+        removed = maven.remove_source(ws, code["relative_path"])
+    else:
+        maven.write_source(ws, code["relative_path"], code["source"])
+        removed = False
+
+    result = maven.package(ws)
+    if not result.ok:
+        raise StageError(
+            "The build failed, so there is nothing to deploy. "
+            + ("; ".join(str(e) for e in result.compile_errors())
+               or f"Maven exited {result.exit_code}."))
+
+    return StageResult(artifact={
+        "intent": code.get("intent"),
+        "removed_source": removed,
+        "sources": [str(p) for p in maven.list_sources(ws)],
+        "build": result.summary(),
+        "log_tail": result.log_tail[-2000:],
+    })
+
+
+async def stage_s_deploy(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    """Upload the jar. THE write: whole-jar replacement, no validated undo."""
+    from core import jef_deploy
+
+    build = ctx.get("build") or {}
+    jar = (build.get("build") or {}).get("jar")
+    if not jar:
+        raise StageError("Run and approve the compile stage first - there is no jar yet.")
+    db = (ctx.get("_db") or {}).get("db_path")
+    plan = await jef_deploy.plan(Path(jar), db_path=db)
+
+    async def commit(dry_run: bool) -> List[Any]:
+        res = await jef_deploy.deploy(Path(jar), dry_run=dry_run,
+                                      run_id=ctx["run_id"], db_path=db)
+        return [("jef.deploy", _DeployResult(res))]
+
+    return StageResult(
+        artifact={
+            "plan": plan.summary(),
+            "erases": plan.erases,
+            "intent": (ctx.get("code") or {}).get("intent"),
+        },
+        commit=commit,
+        warnings=plan.warnings(),
+    )
+
+
+class _DeployResult:
+    """Adapts a jef_deploy result to the shape the engine records for a write.
+
+    jef_deploy already recorded the deploy in its own manifest; this only feeds
+    the shared qad_writes audit trail and the regeneration lock.
+    """
+
+    def __init__(self, res: Dict[str, Any]):
+        plan = res.get("plan") or {}
+        self.ok = bool(res.get("ok"))
+        self.dry_run = bool(res.get("dry_run"))
+        self.data = res.get("response")
+        self.error = res.get("error", "")
+        self.request = {
+            "method": "POST",
+            "url": plan.get("url"),
+            "multipart_field": plan.get("part_field_name"),
+            "filename": plan.get("part_filename"),
+            "classes_after_deploy": plan.get("classes_after_deploy"),
+        }
+
+
 RUNNERS = {
     "standard": {
         "requirements": stage_requirements,
@@ -922,6 +1218,12 @@ RUNNERS = {
         "view": stage_view,
         "lookups": stage_lookups,
         "deploy": stage_deploy,
+    },
+    "serverside": {
+        "target": stage_s_target,
+        "code": stage_s_code,
+        "build": stage_s_build,
+        "deploy": stage_s_deploy,
     },
     "embedded": {
         "requirements": stage_e_requirements,

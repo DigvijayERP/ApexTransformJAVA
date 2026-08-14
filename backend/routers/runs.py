@@ -50,6 +50,13 @@ class RunStage(BaseModel):
     browse_uris: Optional[Dict[str, str]] = None
     configs: Optional[List[Dict[str, Any]]] = None
     parent_key: Optional[str] = None
+    # Server-side gates: override the model's component choice, name the
+    # validation to remove, or hand back hand-edited Java. Explicit fields
+    # rather than `configs` because, like parent_key, each is a single
+    # deterministic override the gate offers by name.
+    bc_name: Optional[str] = None
+    target_class: Optional[str] = None
+    source: Optional[str] = None
 
 
 class SkipStage(BaseModel):
@@ -66,6 +73,12 @@ def _kwargs(body: RunStage) -> Dict[str, Any]:
         out["configs"] = body.configs
     if body.parent_key is not None:
         out["parent_key"] = body.parent_key
+    if body.bc_name is not None:
+        out["bc_name"] = body.bc_name
+    if body.target_class is not None:
+        out["target_class"] = body.target_class
+    if body.source is not None:
+        out["source"] = body.source
     return out
 
 

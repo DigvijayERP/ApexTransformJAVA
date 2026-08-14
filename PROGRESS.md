@@ -1080,6 +1080,49 @@ token response body, both of which carry credentials. Caught, transcript scrubbe
 redacts secrets in query strings AND bodies. The transcripts were gitignored from the start and were
 never committed.
 
+### ✅ CASE 3 IS BUILT — server-side Java validations, create and delete (2026-08-14)
+
+The whole case, wired into the app. `mode="serverside"`, four gates:
+
+| # | Stage | Writes | What it does |
+|---|---|---|---|
+| 1 | Target and rule | no | Pick the component and state the rule. Component list, fields and **real Java types** read from the dependency jar |
+| 2 | Validation code | no | Generate the class. The model writes ONLY the check |
+| 3 | Compile | no | `mvn clean package`. The strongest rehearsal there is, and free |
+| 4 | Deploy to QAD | **yes** | Upload the jar. Whole-jar replacement, so the gate lists everything that will exist afterwards |
+
+**Delete shares the same four stages**, deliberately: the unit of deployment is
+the whole jar, so removing a validation is the same three physical acts as
+adding one (make the workspace right, build, upload) with a different middle
+stage. A second mode would have duplicated three stages to vary one. The intent
+is decided at stage 1 from the prompt ("remove the remarks validation from
+purchase orders") and carried in its artifact.
+
+**Five modules, all tested, all offline:**
+- `core/jar_inspector.py` — `javap`/`jar tf` into save paths, fields, types
+- `builders/extension_builder.py` — deterministic class, model writes the body
+- `core/maven.py` — build, verified on disk, readable compile errors
+- `core/jef_deploy.py` — the upload and the manifest, one writer
+- `store.jef_deploys` — the only record of what is live, since QAD cannot be asked
+
+**The UI mirrors AUX's server-side flow** (pick component → see fields → describe
+rule) with what AUX never had: the field chips carry real Java types, and the
+component's actual save paths are shown, flagged in a warning tone when
+confirmation variants exist.
+
+**Two Windows bugs found and fixed while building**: `mvn` is `mvn.cmd` and
+`subprocess` does not apply PATHEXT, so Maven worked in a terminal and failed
+from code; and `javac` caught a genuine type error (Integer treated as String)
+that the compile gate now reports as one readable line.
+
+Verified end to end as a dry run through the real engine and store: all four
+stages, `run status: complete`, jar built containing the generated class, then
+cleaned up. All seven suites pass.
+
+**Not yet done:** no Case 3 run has been driven from the browser, and the code
+gate has no in-place Java editor (the backend accepts hand-edited source; the
+steer box regenerates instead). Both are UI work, not contract risk.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

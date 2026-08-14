@@ -199,6 +199,37 @@ async def deploy(jar: Path, *, dry_run: bool = True, app_uri: Optional[str] = No
             "response": body}
 
 
+async def fetch_dependency_jar(dest: Path, app_uri: Optional[str] = None) -> Path:
+    """Download QAD's generated-types jar to `dest`.
+
+    A GET whose only effect is a local file, so it needs no approval gate. It
+    lives here rather than in qad_client because that client parses every
+    response as JSON, and this one is 3 MB of `application/java-archive`.
+    """
+    import httpx
+    from qad_client import get_token
+
+    url = config.resolve_url("jef.dependency_jar",
+                             {"app_uri": app_uri or config.app_uri()})
+    token = await get_token()
+    async with httpx.AsyncClient(timeout=300) as client:
+        resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+    if not resp.is_success:
+        raise JefDeployError(
+            f"QAD refused the dependency jar (HTTP {resp.status_code}). Without it "
+            f"there are no generated types to compile against. Body: {resp.text[:300]}")
+    body = resp.content
+    if not body[:2] == b"PK":
+        raise JefDeployError(
+            f"The dependency endpoint returned {len(body)} bytes that are not a jar "
+            f"(content-type {resp.headers.get('content-type')!r}).")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(body)
+    logger.info("[JEF] fetched dependency jar -> %s (%d bytes)", dest, len(body))
+    return dest
+
+
 async def live_classes(app_uri: Optional[str] = None,
                        db_path: Optional[Path] = None) -> Optional[List[str]]:
     """What we believe is deployed. None means we have no record.

@@ -417,3 +417,23 @@ details summary { cursor: pointer; color: var(--text-muted); font-size: 12.5px; 
 details summary:hover { color: var(--text); }
 details pre { margin: 8px 0 0; max-height: 22rem; overflow: auto; font-size: 11.5px; }
 details.writes { margin-top: 16px; }
+
+/* Case 3 pickers. A custom listbox, not a native <select>: AUX learned that a
+   filter which hides the selected option swallows the next click. */
+.pick-list {
+  max-height: 220px; overflow-y: auto; margin: 8px 0;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+}
+.pick-item {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px 12px;
+  cursor: pointer; border-bottom: 1px solid var(--border);
+}
+.pick-item:last-child { border-bottom: none; }
+.pick-item:hover { background: var(--hover); }
+.pick-item.active { background: var(--pill-bg); border-left: 2px solid var(--accent); }
+.pick-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.pick-meta { font-size: 11px; color: var(--text-muted); }
+.chip-type {
+  margin-left: 6px; font-size: 10px; font-style: normal;
+  color: var(--text-muted); text-transform: uppercase;
+}

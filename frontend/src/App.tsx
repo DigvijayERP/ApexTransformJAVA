@@ -14,6 +14,11 @@ const EXAMPLE_PROMPTS: Record<Mode, string[]> = {
     "Extend Items with shipping details: a handling class, a customs code, and a hazard flag.",
     "Add order notes to Sales Order Headers: a sequence number per note, the note text, and an author.",
   ],
+  serverside: [
+    "Block saving a Purchase Order unless Remarks is filled in.",
+    "Require a description on every DigSmokeTest record.",
+    "Remove the remarks validation from purchase orders.",
+  ],
 };
 
 function Health() {
@@ -61,6 +66,11 @@ function Start() {
                 className={`mode-tab ${mode === "embedded" ? "on" : ""}`}
                 onClick={() => setMode("embedded")}>
           Embedded BC (extends a parent)
+        </button>
+        <button role="tab" aria-selected={mode === "serverside"}
+                className={`mode-tab ${mode === "serverside" ? "on" : ""}`}
+                onClick={() => setMode("serverside")}>
+          Server-side rule (Java)
         </button>
       </div>
 
@@ -144,7 +154,9 @@ function RunMode() {
         {done
           ? run.mode === "embedded"
             ? `${run.bc_pascal} was deployed as an embedded extension. Open the parent component's screen in QAD and refresh: the extension grid and tab appear there.`
-            : `${run.bc_pascal} was deployed. Verify it by opening the view in QAD and saving a record.`
+            : run.mode === "serverside"
+              ? "The extension jar was uploaded. A successful upload is not proof the rule fires: open the screen in QAD and try to save a record that breaks it. You should be blocked, with a JEF error id."
+              : `${run.bc_pascal} was deployed. Verify it by opening the view in QAD and saving a record.`
           : "QAD has no undo, so each gate shows the exact payload before it is sent."}
       </p>
     </div>

@@ -307,9 +307,85 @@ EMBEDDED_STAGES: List[Stage] = [
 ]
 
 
+# ── Case 3: server-side Java extensions ──────────────────────────────────────
+#
+# Four gates, mapping onto the three steps AUX's server-side feature used
+# (pick BC -> describe rule -> review/deploy) plus a build gate that AUX had no
+# equivalent of and that turns out to be the most valuable rehearsal available:
+# `mvn clean package` proves the generated Java compiles against QAD's real
+# types without contacting QAD at all.
+#
+# ONE MODE COVERS BOTH CREATE AND DELETE. The unit of deployment is the whole
+# jar, so both intents are the same three physical acts: make the workspace
+# right, build it, upload it. Only the middle stage differs - writing a class
+# or removing one - so a second mode would duplicate three stages to vary one.
+# The intent is decided at stage 1 and carried in its artifact.
+SERVERSIDE_STAGES: List[Stage] = [
+    Stage(
+        id="target",
+        number=1,
+        label="Target and rule",
+        description=(
+            "Choose the business component to guard and describe the rule in plain "
+            "English. The component list, its fields and their real Java types are "
+            "read from QAD's own dependency jar, so nothing here is guessed. To "
+            "remove a validation instead, say so: 'remove the remarks validation "
+            "from purchase orders'."
+        ),
+        gated=True,
+        artifact_kind="serverside_target",
+        editable=True,
+    ),
+    Stage(
+        id="code",
+        number=2,
+        label="Validation code",
+        description=(
+            "Write the Java extension. Only the check itself is generated: the class, "
+            "its imports and one override per save path the component actually "
+            "exposes are derived from the compiled base class. When removing a "
+            "validation, this stage shows exactly which class will be dropped from "
+            "the workspace."
+        ),
+        gated=True,
+        artifact_kind="serverside_code",
+        editable=True,
+    ),
+    Stage(
+        id="build",
+        number=3,
+        label="Compile",
+        description=(
+            "Run Maven over the whole workspace. Nothing is sent to QAD: this is a "
+            "local rehearsal, and the compiler is a free and exact reviewer of the "
+            "generated code. A failure here shows the file, line and reason."
+        ),
+        gated=True,
+        artifact_kind="serverside_build",
+        # Local only. It writes to disk, never to QAD, so it cannot lock the run.
+    ),
+    Stage(
+        id="deploy",
+        number=4,
+        label="Deploy to QAD",
+        description=(
+            "Upload the jar. This REPLACES every server-side extension on the app: "
+            "anything not in this jar stops working immediately, and QAD returns "
+            "success either way. The gate lists everything that will exist "
+            "afterwards, and names anything about to be deleted."
+        ),
+        gated=True,
+        writes=["jef.deploy"],
+        artifact_kind="serverside_deploy",
+        locks_upstream=True,
+    ),
+]
+
+
 MODES: Dict[str, List[Stage]] = {
     "standard": STAGES,
     "embedded": EMBEDDED_STAGES,
+    "serverside": SERVERSIDE_STAGES,
 }
 
 _BY_MODE: Dict[str, Dict[str, Stage]] = {
