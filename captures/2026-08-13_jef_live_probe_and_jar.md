@@ -372,6 +372,29 @@ workspace silently erases every extension not in it** — no warning, no error, 
 deploy gate must therefore list every class that WILL exist after the deploy, and loudly flag any
 class present in the last deploy but missing from this one.
 
+### 🔴 THE FIRST OBSERVED DEPLOY FAILURE — and empty jars are illegal
+
+Removing the PO validation was attempted the obvious way: build a jar with no classes and upload it.
+QAD refused, giving us the failure shape that had never been seen:
+
+```
+HTTP 400
+{"errors":["Jar File validation failed: JAR file does not contain any signed entries"]}
+```
+
+**Two facts, both load-bearing for Case 3:**
+
+1. **The failure envelope is `{"errors": [ ... ]}` with a 4xx status.** It is NOT the `submitResult`
+   shape the BC endpoints use, and NOT the empty body a success returns. So: success = 2xx with an
+   empty body; failure = 4xx with a JSON `errors` array. Surface those strings verbatim.
+2. **"Deploy nothing" cannot be expressed as an empty jar.** The uploaded jar must contain at least
+   one entry.
+
+The remedy, now permanent in the workspace: `com.yash.digwish.ExtensionsPlaceholder` — a final class
+with a private constructor, **no `@Extension` annotation and extending no BaseService**, so QAD can
+never bind it to a component. Deploying a jar containing only it is how "no extensions at all" is
+expressed on the wire. Verified: HTTP 200, and the PO validation stopped firing.
+
 ### Incidental confirmation for Case 2
 
 The Purchase Orders screen shows a **`DigPoInspection` tab** beside Main / Order Lines / Receiving /
