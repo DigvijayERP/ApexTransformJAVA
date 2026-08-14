@@ -1020,11 +1020,31 @@ sufficient; no cookie, no `Expect: 100-continue`. `jef.deploy` in the registry i
 Since the plugin cannot deploy on this environment, that is not a convenience, it is the only
 working path.
 
+### 🎉🎉 AND IT FIRES — the JEF chain is proven end to end (2026-08-14, 11:50 IST)
+
+Minutes after the deploy, the owner saved a DigSmokeTest record with a blank Description in QAD's
+own UI and got:
+
+```
+Unable to save
+Errors:  Description is required.      Error ID: JEF20260814…
+```
+
+That string is the exact literal from the class we wrote; the `JEF` prefix is the Java Extension
+Framework's own error namespace; and it rendered in the Web UI Errors grid precisely as the class-6
+guide describes. The save was blocked, so it validated rather than merely logged.
+
+**discover → generate → build → deploy → EXECUTE, every stage now evidenced on this environment.**
+It also retires the biggest inherited risk: the SSS "deploys cleanly and silently never fires"
+trap does not apply. Overriding `create`/`update` is sufficient, now confirmed behaviourally as
+well as structurally.
+
 **Still unproven, and named rather than assumed:** (1) what a REJECTED deploy looks like — no
 failure mode has been observed, so the deploy stage must treat any non-2xx as failure and surface
-the raw status and body instead of pattern-matching; (2) whether the extension actually FIRES. A 200
-proves QAD accepted an upload, nothing more, and the SSS precedent is a rule that deploys cleanly
-and silently never runs. That needs a behavioural test.
+the raw status and body instead of pattern-matching; (2) whether rollback works — removing a class
+and redeploying *should* erase it under whole-jar replacement, untested. Note
+`DigSmokeTestValidation` is LIVE and will keep rejecting blank descriptions on `DigSmokeTest` until
+a jar without it is deployed.
 
 ⚠️ Incidental: `Init app` was run mid-session and created a SECOND, empty scaffold at
 `Desktop/Python_Snake/urn_app_com.yash.digwish`. Harmless but dangerous — deploying from it would

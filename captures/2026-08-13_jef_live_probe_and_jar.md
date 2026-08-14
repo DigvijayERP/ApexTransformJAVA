@@ -289,9 +289,38 @@ content-length: 0
 missing manifest key). Every failure mode remains unobserved, so error handling in the deploy stage
 must treat any non-2xx as a failure and surface the raw status and body rather than pattern-match.
 
-⚠️ Also still unestablished: whether the extension actually FIRES. A 200 proves QAD accepted the
-upload, nothing more. The SSS precedent (a rule that deploys cleanly and silently never runs) is
-exactly why this needs a behavioural test, not a status code.
+## 6a. 🎉 THE EXTENSION FIRES — full chain proven (2026-08-14, 11:50 IST)
+
+The behavioural test, run by the owner in QAD's own UI minutes after the deploy. New DigSmokeTest
+record, Test Code `1251jsd`, **Description left blank**, Save:
+
+```
+Unable to save
+Errors
+  Field | Error                   | Error ID
+        | Description is required.| JEF20260814…
+```
+
+- **`Description is required.`** is the exact literal from `DigSmokeTestValidation.validate()`.
+  Nothing else on the platform produces that string; it was written for this test.
+- **The Error ID carries the `JEF` prefix** — the Java Extension Framework's own error namespace
+  (`DOC:65-66` names JEF as the framework's acronym), date-stamped `20260814`.
+- It surfaced in the Web UI **Errors grid with Field / Error / Error ID columns**, exactly the
+  presentation the class-6 guide documents at `DOC:871-875`.
+- The save was **blocked**: no record was written, which is the validation doing its job rather than
+  merely logging.
+
+**This closes the JEF chain end to end: discover → generate → build → deploy → EXECUTE.** Every
+stage is now evidenced on this environment, not inferred.
+
+It also retires the last inherited risk. The SSS precedent (handoff I.3) was a rule that deploys
+cleanly, reports success, and silently never runs. JEF has no `…WithConfirmation` split (section 4)
+and the override demonstrably fires on the UI's ordinary save path. **Overriding `create`/`update`
+is sufficient, confirmed behaviourally as well as structurally.**
+
+⚠️ Consequence to remember: `DigSmokeTestValidation` is LIVE on `DigSmokeTest` and will keep
+rejecting blank descriptions until a jar without it is deployed. Removing the class and redeploying
+*should* erase it (whole-jar replacement) but that rollback is still untested.
 
 ## 7. What is still unknown after this probe
 
