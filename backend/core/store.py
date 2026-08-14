@@ -132,10 +132,41 @@ async def init_db(db_path: Optional[Path] = None) -> None:
                 executed_at  TEXT NOT NULL
             )
         """)
+        # THE DEPLOY MANIFEST (Case 3).
+        #
+        # QAD offers no endpoint that reports which Java extensions are
+        # currently deployed - the decompiled plugin has no such call and none
+        # was found on the wire. Meanwhile the upload REPLACES the whole jar:
+        # a class absent from the new one is deleted, silently, with HTTP 200
+        # either way (proven live 2026-08-14).
+        #
+        # So this table is the ONLY record of what is live. Without it the
+        # deploy gate cannot warn "you are about to erase these three
+        # validations", and delete cannot know what there is to delete.
+        # It is deliberately app-scoped, not run-scoped: the deployed set
+        # belongs to the app and outlives any single run.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS jef_deploys (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_uri     TEXT NOT NULL,
+                run_id      TEXT,
+                -- JSON array of fully-qualified class names in the uploaded jar
+                classes     TEXT NOT NULL,
+                jar_bytes   INTEGER NOT NULL DEFAULT 0,
+                jar_sha256  TEXT,
+                dry_run     INTEGER NOT NULL DEFAULT 1,
+                ok          INTEGER NOT NULL,
+                status_code INTEGER,
+                response    TEXT,
+                deployed_at TEXT NOT NULL
+            )
+        """)
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_writes_run ON qad_writes(run_id)")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_artifacts_run ON stage_artifacts(run_id)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deploys_app ON jef_deploys(app_uri)")
         await db.commit()
 
 
@@ -418,3 +449,102 @@ async def can_regenerate(run_id: str, stage_id: str,
 
 async def has_live_writes(run_id: str, db_path: Optional[Path] = None) -> bool:
     return any(w["ok"] for w in await writes_for_run(run_id, live_only=True, db_path=db_path))
+
+
+# ── The JEF deploy manifest (Case 3) ─────────────────────────────────────────
+# Read the schema comment on jef_deploys first: this is the only record of what
+# is deployed, because QAD cannot be asked.
+
+async def record_deploy(app_uri: str, classes: List[str], *, ok: bool,
+                        dry_run: bool, jar_bytes: int = 0,
+                        jar_sha256: Optional[str] = None,
+                        status_code: Optional[int] = None,
+                        response: Any = None, run_id: Optional[str] = None,
+                        db_path: Optional[Path] = None) -> int:
+    """Record one upload attempt, successful or not.
+
+    Failures are recorded too: a 400 tells us the deployed set did NOT change,
+    which is exactly what the next gate needs in order to diff correctly.
+    """
+    async with aiosqlite.connect(db_path or DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO jef_deploys (app_uri, run_id, classes, jar_bytes, jar_sha256,"
+            " dry_run, ok, status_code, response, deployed_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (app_uri, run_id, json.dumps(sorted(classes)), jar_bytes, jar_sha256,
+             1 if dry_run else 0, 1 if ok else 0, status_code,
+             json.dumps(response) if response is not None else None, _now()),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def deployed_classes(app_uri: str,
+                           db_path: Optional[Path] = None) -> Optional[List[str]]:
+    """What is live on QAD for this app, per our own record.
+
+    Only SUCCESSFUL, LIVE uploads count: a dry run sent nothing, and a rejected
+    one left the previous jar in place.
+
+    None means "we have never successfully deployed this app", which is NOT the
+    same as "nothing is deployed" - someone may have deployed by hand, and this
+    table cannot know. Callers must present that difference honestly.
+    """
+    async with aiosqlite.connect(db_path or DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT classes FROM jef_deploys WHERE app_uri=? AND ok=1 AND dry_run=0"
+            " ORDER BY id DESC LIMIT 1", (app_uri,)
+        ) as cur:
+            row = await cur.fetchone()
+    return json.loads(row["classes"]) if row else None
+
+
+async def deploy_history(app_uri: str, limit: int = 20,
+                         db_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(db_path or DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM jef_deploys WHERE app_uri=? ORDER BY id DESC LIMIT ?",
+            (app_uri, limit)
+        ) as cur:
+            rows = await cur.fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["classes"] = json.loads(d["classes"])
+        out.append(d)
+    return out
+
+
+async def deploy_diff(app_uri: str, new_classes: List[str],
+                      db_path: Optional[Path] = None) -> Dict[str, Any]:
+    """What deploying `new_classes` would change. THE deploy gate's content.
+
+    `removed` is the dangerous one: those extensions stop working the moment
+    the upload succeeds, with no warning from QAD and a 200 either way. It is
+    reported separately from added/kept so a gate can shout about it.
+    """
+    previous = await deployed_classes(app_uri, db_path=db_path)
+    new = sorted(set(new_classes))
+    if previous is None:
+        return {
+            "known": False,
+            "previous": [],
+            "added": new,
+            "kept": [],
+            "removed": [],
+            "note": ("No successful live deploy of this app has been recorded here, so "
+                     "what is currently deployed is unknown. If extensions were deployed "
+                     "by other means, this upload REPLACES them and they will stop "
+                     "working."),
+        }
+    prev = sorted(set(previous))
+    return {
+        "known": True,
+        "previous": prev,
+        "added": [c for c in new if c not in prev],
+        "kept": [c for c in new if c in prev],
+        "removed": [c for c in prev if c not in new],
+        "note": "",
+    }
