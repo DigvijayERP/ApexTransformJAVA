@@ -37,6 +37,7 @@ Requires a JDK on PATH (`jar`, `javap`). Verified against JDK 17.0.12.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field as dc_field
 from pathlib import Path
@@ -153,13 +154,19 @@ def _simple(java_type: str) -> str:
 
 
 def _run(args: List[str]) -> str:
-    try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=120)
-    except FileNotFoundError as exc:
+    # Resolve through PATHEXT rather than passing a bare name: on Windows a
+    # tool shipped as .cmd/.bat (Maven is) raises WinError 2 from subprocess
+    # even though the same word works in a terminal. jar/javap are .exe today,
+    # but a wrapper script would break this the same way.
+    exe = shutil.which(args[0])
+    if not exe:
         raise JarInspectionError(
             f"'{args[0]}' is not on PATH. Case 3 needs a JDK (17 verified). "
-            f"Install one, or set JAVA_HOME and add its bin/ to PATH."
-        ) from exc
+            f"Install one, or set JAVA_HOME and add its bin/ to PATH.")
+    try:
+        proc = subprocess.run([exe, *args[1:]], capture_output=True, text=True, timeout=120)
+    except FileNotFoundError as exc:
+        raise JarInspectionError(f"Could not execute {exe}: {exc}") from exc
     except subprocess.TimeoutExpired as exc:
         raise JarInspectionError(f"'{args[0]}' timed out after 120s") from exc
     if proc.returncode != 0:
