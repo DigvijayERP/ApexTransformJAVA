@@ -33,6 +33,7 @@ SAFETY
 """
 from __future__ import annotations
 
+import re
 import sys
 import threading
 from datetime import datetime, timezone
@@ -69,7 +70,7 @@ _SKIP_RESPONSE_HEADERS = {"connection", "content-length", "transfer-encoding",
 
 
 _SECRET_PARAMS = {"password", "client_secret", "refresh_token", "access_token",
-                  "token", "pwd", "secret"}
+                  "token", "pwd", "secret", "username"}
 
 
 def _redact_path(path: str) -> str:
@@ -91,6 +92,18 @@ def _redact_path(path: str) -> str:
         else:
             out.append(pair)
     return head + "?" + "&".join(out)
+
+
+def _redact_body(text: str) -> str:
+    """Mask secret VALUES in a JSON body, keeping the keys.
+
+    The OAuth response hands back access_token and refresh_token in the body,
+    and a refresh token is a credential in its own right. The shape is what
+    documents the contract, so keys survive and only values are masked.
+    """
+    return re.sub(
+        r'("(?:access_token|refresh_token|password|client_secret|sessionId)"\s*:\s*")[^"]*(")',
+        r"\1<REDACTED>\2", text)
 
 
 def _redact(headers: Dict[str, str]) -> Dict[str, str]:
@@ -122,6 +135,7 @@ def _describe_body(body: bytes, content_type: str) -> str:
             text = body.decode("utf-8", errors="replace")
         except Exception:
             return f"binary, {len(body)} bytes"
+        text = _redact_body(text)
         if len(text) > 4000:
             return f"```\n{text[:4000]}\n… truncated, {len(body)} bytes total\n```"
         return f"```\n{text}\n```"
