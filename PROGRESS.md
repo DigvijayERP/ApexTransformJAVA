@@ -1039,12 +1039,36 @@ It also retires the biggest inherited risk: the SSS "deploys cleanly and silentl
 trap does not apply. Overriding `create`/`update` is sufficient, now confirmed behaviourally as
 well as structurally.
 
-**Still unproven, and named rather than assumed:** (1) what a REJECTED deploy looks like — no
-failure mode has been observed, so the deploy stage must treat any non-2xx as failure and surface
-the raw status and body instead of pattern-matching; (2) whether rollback works — removing a class
-and redeploying *should* erase it under whole-jar replacement, untested. Note
-`DigSmokeTestValidation` is LIVE and will keep rejecting blank descriptions on `DigSmokeTest` until
-a jar without it is deployed.
+### Second JEF test: standard BC validated, WithConfirmation correction, ROLLBACK PROVEN (2026-08-14)
+
+Owner asked for a second test on a **standard** screen: Purchase Order Remarks must not be empty.
+Deployed a jar containing ONLY `PurchaseOrderRemarksValidation`, which made the same deploy a
+rollback test. Both passed.
+
+**🔴 CORRECTION to the same morning's finding.** "JEF has no `…WithConfirmation` split" is true only
+of entity-builder BCs. `javap` shows PurchaseOrderHeader and SalesOrderHeader each expose **three**
+WithConfirmation methods; Item and our own DigSmokeTest expose none. Standard BCs also take a bare
+`DataSet` on create/update where generated ones take `InputOutput<DataSet>`. So the SSS
+"deploys cleanly and silently never fires" trap **does** apply to JEF on coded BCs. The class
+overrides all four save paths, and QAD rejected a blank-Remarks save with
+`Remarks is required on a Purchase Order.` / `JEF20260814…`.
+**Case 3 design rule, evidence-backed: `javap` the target BaseService and override EVERY save path
+it exposes.**
+
+**🎉 ROLLBACK WORKS.** With `DigSmokeTestValidation` absent from the new jar, a DigSmokeTest record
+with a blank Description now **saves**. Whole-jar replacement confirmed in both directions: the
+upload installs what the jar contains and removes what it does not. This was the last item the
+handoff listed as untested (I.4).
+⚠️ Its flip side is Case 3's sharpest hazard: deploying from an incomplete workspace **silently
+erases** every extension not in the jar, with a 200 either way. The deploy gate must list every
+class that will exist after the deploy and loudly flag any class present last time and missing now.
+
+**Still unproven:** what a REJECTED deploy looks like. No failure mode has been observed, so the
+deploy stage must treat any non-2xx as failure and surface the raw status and body rather than
+pattern-match.
+
+Incidental: the Purchase Orders screen now shows a `DigPoInspection` tab, confirming Case 2's
+embedded child renders on a standard QAD parent.
 
 ⚠️ Incidental: `Init app` was run mid-session and created a SECOND, empty scaffold at
 `Desktop/Python_Snake/urn_app_com.yash.digwish`. Harmless but dangerous — deploying from it would

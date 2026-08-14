@@ -322,6 +322,61 @@ is sufficient, confirmed behaviourally as well as structurally.**
 rejecting blank descriptions until a jar without it is deployed. Removing the class and redeploying
 *should* erase it (whole-jar replacement) but that rollback is still untested.
 
+## 6b. Standard BC validated, and ROLLBACK PROVEN (2026-08-14, 12:00 IST)
+
+Second deploy: a jar containing **only** `PurchaseOrderRemarksValidation`, targeting
+`com.qad.purchasing.purchaseorders.PurchaseOrderHeaderBaseService` — a QAD-shipped coded BC, not one
+we generated. `DigSmokeTestValidation` was deliberately left out so the same deploy tested rollback.
+
+### 🔴 CORRECTION: the `…WithConfirmation` split IS real on standard BCs
+
+Section 4 concluded "JEF has no WithConfirmation split". **That is true only of entity-builder BCs.**
+`javap` across the jar:
+
+| Base service | `WithConfirmation` methods |
+|---|---|
+| `PurchaseOrderHeaderBaseService` | **3** (create/update/delete) |
+| `SalesOrderHeaderBaseService` | **3** |
+| `ItemBaseService` | 0 |
+| `DigSmokeTestBaseService` (ours) | 0 |
+
+So the SSS trap (handoff I.3 — "deploys cleanly, silently never fires") **does apply to JEF**, on
+coded BCs. Signatures differ too: standard BCs take a bare `DataSet` on create/update, while
+generated ones take `InputOutput<DataSet>`; and `fetch`/`exists` carry the extra key argument the
+brief described, which generated BCs do not.
+
+`PurchaseOrderRemarksValidation` therefore overrides **all four** save paths. Result, in QAD's UI,
+saving a PO with Remarks empty:
+
+```
+Unable to save
+Errors:  Remarks is required on a Purchase Order.    Error ID: JEF20260814…
+```
+
+**Design rule for Case 3, now evidence-backed: read the target `BaseService` with `javap` and
+override EVERY save path it exposes. Never assume two.** Had this class been written like the first
+one it would have compiled, deployed, returned 200, and never fired.
+
+### 🎉 ROLLBACK WORKS — the last unknown in the handoff
+
+Same deploy, same moment: a DigSmokeTest record (`456tyu`) with a **blank Description** now
+**SAVES**. The previously-live `DigSmokeTestValidation` is gone because it was absent from the new
+jar.
+
+**Whole-jar replacement is confirmed in both directions**: uploading a jar installs what it contains
+and REMOVES what it does not. Handoff I.4 listed rollback as "untested, nothing may depend on it";
+it is now tested and dependable.
+
+⚠️ The flip side is the sharpest hazard in Case 3: **deploying a jar built from an incomplete
+workspace silently erases every extension not in it** — no warning, no error, 200 either way. The
+deploy gate must therefore list every class that WILL exist after the deploy, and loudly flag any
+class present in the last deploy but missing from this one.
+
+### Incidental confirmation for Case 2
+
+The Purchase Orders screen shows a **`DigPoInspection` tab** beside Main / Order Lines / Receiving /
+Billing / Totals / Notes — the embedded child from Case 2, rendering on a standard QAD parent.
+
 ## 7. What is still unknown after this probe
 
 Unchanged from the handoff, because none of it is readable:
