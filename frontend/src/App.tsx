@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { token, type RunMode as Mode } from "./api";
+import { type RunMode as Mode } from "./api";
 import { useRun } from "./RunContext";
+import { ApexLogo } from "./components/ApexLogo";
+import { SettingsMenu } from "./components/SettingsMenu";
 import { Payload } from "./components/Artifact";
 import { StageGate } from "./components/StageGate";
 import { StageRail } from "./components/StageRail";
@@ -37,7 +39,6 @@ function Start() {
   const [prompt, setPrompt] = useState("");
   const [dryRun, setDryRun] = useState(true);
   const [mode, setMode] = useState<Mode>("standard");
-  const [tok, setTok] = useState(token.get());
   const working = state.busy !== null;
   const canSend = !working && prompt.trim().length > 0;
 
@@ -56,19 +57,19 @@ function Start() {
 
       {/* The mode changes the stage list, so it is chosen up front, not
           inferred from the prompt. The rail then renders that mode's manifest. */}
-      <div className="mode-toggle" role="tablist" aria-label="Run mode">
+      <div className="segmented-toggle" role="tablist" aria-label="Run mode">
         <button role="tab" aria-selected={mode === "standard"}
-                className={`mode-tab ${mode === "standard" ? "on" : ""}`}
+                className={`segmented-toggle-btn ${mode === "standard" ? "active" : ""}`}
                 onClick={() => setMode("standard")}>
           Standalone BC
         </button>
         <button role="tab" aria-selected={mode === "embedded"}
-                className={`mode-tab ${mode === "embedded" ? "on" : ""}`}
+                className={`segmented-toggle-btn ${mode === "embedded" ? "active" : ""}`}
                 onClick={() => setMode("embedded")}>
           Embedded BC (extends a parent)
         </button>
         <button role="tab" aria-selected={mode === "serverside"}
-                className={`mode-tab ${mode === "serverside" ? "on" : ""}`}
+                className={`segmented-toggle-btn ${mode === "serverside" ? "active" : ""}`}
                 onClick={() => setMode("serverside")}>
           Server-side rule (Java)
         </button>
@@ -110,13 +111,9 @@ function Start() {
         ))}
       </div>
 
-      {state.health?.auth_enforced && (
-        <label className="field" style={{ width: "100%", maxWidth: 560 }}>
-          <span>API token</span>
-          <input type="password" value={tok} placeholder="ADAPTIVE_API_TOKEN"
-                 onChange={(e) => { setTok(e.target.value); token.set(e.target.value); }} />
-        </label>
-      )}
+      {/* The API token moved to the header's settings menu. A credential field
+          does not belong in the primary flow, and there it was also unreachable
+          once a run had started. */}
     </section>
   );
 }
@@ -194,20 +191,32 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="top">
-        <h1 className="wordmark">
-          Adaptive <span className="brand-suffix">(Java)</span>
-        </h1>
-        {started && (
-          <div className="run-meta">
-            <span>{state.run?.bc_pascal ?? "unnamed"}</span>
-            {state.run?.mode === "embedded" && <em className="tag">embedded</em>}
-            <em className={`tag ${state.run?.dry_run ? "" : "write"}`}>
-              {state.run?.dry_run ? "dry run" : "live"}
-            </em>
-            <button className="ghost" onClick={reset}>New run</button>
-          </div>
-        )}
+      {/* Brand lockup copied from AUX's Header.tsx so both APEX apps present
+          the same mark and wordmark. The app label after it is what separates
+          this tab from the other one. */}
+      <header className="app-header">
+        <div className="app-header-brand">
+          <ApexLogo size={26} />
+          <span className="app-header-wordmark">
+            <strong>Apex</strong>
+            <span className="brand-suffix">Transform</span>
+          </span>
+          <span className="app-header-app"></span>
+        </div>
+
+        <div className="app-header-right">
+          {started && (
+            <div className="run-meta">
+              <span>{state.run?.bc_pascal ?? "unnamed"}</span>
+              {state.run?.mode === "embedded" && <em className="tag">embedded</em>}
+              <em className={`tag ${state.run?.dry_run ? "" : "write"}`}>
+                {state.run?.dry_run ? "dry run" : "live"}
+              </em>
+              <button className="ghost" onClick={reset}>New run</button>
+            </div>
+          )}
+          <SettingsMenu />
+        </div>
       </header>
 
       <div className="main-card">

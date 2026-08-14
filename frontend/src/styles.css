@@ -23,15 +23,47 @@
   --success:     #a78bfa;
   --error:       #fb7185;
   --warning:     #fbbf24;
+  --running:     #94a3b8;
+
+  /* Status language for dots and chips, mapped onto the palette above. */
+  --status-ok:      var(--success);
+  --status-warn:    var(--warning);
+  --status-error:   var(--error);
+  --status-neutral: var(--running);
   --pill-bg:     rgba(139, 92, 246, 0.15);
   --on-accent:   #fff;
   --surface-1:   rgba(255, 255, 255, 0.03);
+  --surface-2:   rgba(255, 255, 255, 0.05);
   --surface-3:   rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.15);
+
+  /* accent @ 25% alpha — segmented-toggle track border. Derived from --accent. */
+  --accent-soft-border: rgba(139, 92, 246, 0.25);
+
+  /* 2bEcho logo — offset A-chevrons (back = deeper indigo, front = lighter). */
+  --logo-chevron-back:  #5647c2;
+  --logo-chevron-front: #9c8fff;
 
   --font-body:    'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: 'Outfit', sans-serif;
   --font-mono:    "SF Mono", "Fira Code", monospace;
+
+  /* Type scale — the subset this app uses, values verbatim from AUX. */
+  --fs-xs:    11px;
+  --fs-sm:    12px;
+  --fs-base:  13px;
+  --fs-xl:    16px;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+
+  /* Spacing scale — the subset this app uses. */
+  --space-4:  4px;
+  --space-6:  6px;
+  --space-8:  8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
 
   --radius-md:   6px;
   --radius-lg:   8px;
@@ -39,11 +71,21 @@
   --radius-card: 14px;
   --radius-16:   16px;
   --radius-18:   18px;
+  --radius-pill: 999px;
+  --radius-circle: 50%;
+
+  --dur-fast: 0.15s;
+  --dur-base: 0.2s;
 
   --shadow-card:  0 4px 24px rgba(0, 0, 0, 0.18), 0 1px 4px rgba(0, 0, 0, 0.10);
+  --shadow-panel: 0 4px 24px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08);
   --shadow-float: 0 12px 40px rgba(0, 0, 0, 0.40);
   --shadow-btn-accent: 0 2px 8px rgba(124, 58, 237, 0.50), 0 1px 3px rgba(0, 0, 0, 0.30);
   --glow-accent:  0 0 18px 4px rgba(139, 92, 246, 0.40);
+
+  /* Layout dims — the sticky header sits above content, below any modal. */
+  --header-h: 56px;
+  --z-sticky: 100;
 }
 
 * { box-sizing: border-box; }
@@ -66,32 +108,230 @@ h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
 ::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.35); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.6); }
 
-/* ── App shell: header bar + floating aurora main card ─────────────────── */
+/* ── App shell: full-bleed sticky header + floating aurora main card ────── */
 .app {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  padding: 0 10px 10px;
 }
 
-.top {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px;
+/* Header rules copied from aux_web_version/frontend/src/index.css (.app-header
+   and friends) so both APEX apps carry the identical bar and brand lockup.
+   It is full-bleed, which is why the inset moved off .app and onto .main-card. */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  height: var(--header-h);
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;   /* left | centered slot | right */
+  align-items: center;
+  gap: var(--space-20);
+  padding: 0 var(--space-16);
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-panel);
 }
-.wordmark {
+
+/* Columns are pinned rather than left to auto-placement: this app has no
+   centre control yet, and without this the right block would land in the
+   middle column instead of the far right. */
+.app-header-brand {
+  grid-column: 1;
+  justify-self: start;
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-shrink: 0;
+}
+
+/* Reserved centre slot, so a segmented toggle can be dropped in later exactly
+   as AUX does it. */
+.app-header > .segmented-toggle {
+  grid-column: 2;
+  justify-self: center;
+}
+
+.app-header-wordmark {
   font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 700;
+  font-size: var(--fs-xl);          /* 16px */
   letter-spacing: -0.01em;
+  color: var(--text);
+  display: inline-flex;
+  align-items: baseline;
 }
-.wordmark .brand-suffix { font-weight: 400; color: var(--text-muted); }
+.app-header-wordmark strong {
+  font-weight: 700;
+  color: var(--text);
+}
+.app-header-wordmark .brand-suffix {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Which of the two APEX apps this is. Subordinate to the wordmark on purpose:
+   the lockup is now identical in both, so the tab still needs something that
+   tells them apart at a glance. */
+.app-header-app {
+  padding-left: var(--space-10);
+  margin-left: var(--space-4);
+  border-left: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.app-header-right {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  flex-shrink: 0;
+}
+
 .run-meta { display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; }
+
+/* ── Header settings menu ───────────────────────────────────────────────────
+   Icon button follows the SECONDARY BUTTON pattern documented in AUX's
+   design-tokens.css; the panel follows its settings surface (section titles,
+   status dots, read-only value), and the row recipes below are copied from
+   AUX's index.css. Selectors are parent-qualified for the same reason the
+   segmented toggle's are: the global `button:hover:not(:disabled)` rule in this
+   stylesheet would otherwise outrank them. */
+/* Deliberately NOT position:relative. The panel anchors to .app-header, which
+   is already positioned (sticky), so `top: 100%` means the header's bottom edge
+   exactly. Anchored to this wrapper instead, the offset depended on whatever
+   the tallest sibling in .app-header-right happened to be, and the panel opened
+   over the header's bottom border. */
+.settings-menu { display: flex; align-items: center; }
+
+.settings-menu .icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--dur-base);
+}
+.settings-menu .icon-btn:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+/* Open state uses the same "selected" language as .rail-item.active. */
+.settings-menu .icon-btn.on,
+.settings-menu .icon-btn.on:hover:not(:disabled) {
+  background: var(--pill-bg);
+  border-color: var(--accent-soft-border);
+  color: var(--accent);
+}
+
+.settings-pop {
+  position: absolute;
+  top: calc(100% + var(--space-8));   /* 100% = the header's height */
+  right: var(--space-16);             /* lines up with the header's content edge */
+  z-index: 1;
+  width: 340px;
+  max-height: calc(100vh - var(--header-h) - var(--space-20));
+  overflow-y: auto;
+  padding: var(--space-16);
+  text-align: left;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-12);
+  box-shadow: var(--shadow-float);
+}
+
+/* AUX sizes this section for a full page (32px). Tightened for a popover. */
+.settings-section { margin-bottom: var(--space-20); }
+.settings-section.last { margin-bottom: 0; }
+
+.settings-section-title {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--space-12);
+  padding-bottom: var(--space-8);
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-token-row { display: flex; align-items: center; gap: var(--space-8); }
+.settings-token-row input { font-family: var(--font-mono); font-size: var(--fs-base); }
+.settings-token-row button { flex-shrink: 0; }
+
+.settings-note {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  margin: var(--space-8) 0 0;
+}
+/* A missing token that the backend requires is a blocked write waiting to
+   happen, so it reads in the warning tone rather than as a note. */
+.settings-warn {
+  font-size: var(--fs-sm);
+  color: var(--warning);
+  margin: var(--space-8) 0 0;
+}
+
+.settings-status-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-6) 0;
+}
+.settings-status-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--radius-circle);
+  background: var(--status-neutral);
+}
+.settings-status-dot.ok  { background: var(--status-ok); }
+.settings-status-dot.bad { background: var(--status-error); }
+.settings-status-label {
+  font-size: var(--fs-base);
+  color: var(--text);
+}
+
+/* Narrow windows. The header is three fixed-size blocks, so below roughly 720px
+   they stop fitting and the right-hand block overflows past the viewport edge,
+   taking the settings button with it. The secondary label and the run's
+   component name are the first things to go: both are repeated elsewhere on the
+   page, and neither is a control. */
+@media (max-width: 720px) {
+  .app-header { gap: var(--space-8); }
+  .app-header-app { display: none; }
+  .run-meta > span:first-child { display: none; }   /* the BC name */
+}
+/* Below the panel's own width, drop it to the full content width. */
+@media (max-width: 400px) {
+  .settings-pop { width: calc(100vw - var(--space-20)); }
+}
+
+.settings-readonly-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-8) var(--space-12);
+  margin-top: var(--space-8);
+  word-break: break-all;
+}
 
 .main-card {
   flex: 1;
   display: flex;
   flex-direction: column;
   position: relative;
+  margin: 10px;
   border-radius: var(--radius-card);
   background-color: var(--bg);
   background-image:
@@ -142,18 +382,47 @@ select {
   outline: none;
 }
 
-/* Run-mode choice on the start screen. Changes the stage list, so it sits
-   above the composer rather than hiding in it. */
-.mode-toggle { display: flex; gap: 8px; }
-.mode-tab {
-  padding: 8px 16px; border-radius: 999px;
-  border: 1px solid var(--border); background: transparent;
-  color: var(--text-muted); font-size: 13px; font-weight: 600;
-  cursor: pointer; transition: all 0.15s;
-}
-.mode-tab.on {
-  color: var(--accent); border-color: rgba(139, 92, 246, 0.5);
+/* Segmented toggle — the recipe copied from AUX (.segmented-toggle in its
+   index.css), so this app has one segmented-control implementation and it is
+   the same one the other app uses. Carries the run-mode choice on the start
+   screen: it changes the stage list, so it sits above the composer rather than
+   hiding in it.
+
+   Selectors are parent-qualified, unlike AUX's. This stylesheet has a global
+   `button` rule whose `button:hover:not(:disabled)` chain outranks a lone
+   `.segmented-toggle-btn:hover`, which would have repainted the hovered
+   segment in the generic button grey. Specificity settles it regardless of
+   source order. */
+.segmented-toggle {
+  display: inline-flex;
+  gap: var(--space-8);
   background: var(--pill-bg);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--accent-soft-border);
+}
+.segmented-toggle .segmented-toggle-btn {
+  background: transparent;
+  border: none;
+  padding: var(--space-8) var(--space-16);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+  transition: all var(--dur-fast);
+}
+.segmented-toggle .segmented-toggle-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+  border-color: transparent;
+}
+.segmented-toggle .segmented-toggle-btn.active,
+.segmented-toggle .segmented-toggle-btn.active:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-btn-accent);
 }
 
 .field { display: block; margin: 0.7rem 0; }

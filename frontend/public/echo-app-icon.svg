@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <style>
+    /* Transparent background — the mark sits directly on the browser tab.
+       Colors match the header ApexLogo and adapt to the browser's theme. */
+    .echo-back  { stroke: #b4a9f0; }
+    .echo-front { stroke: #5A4CDD; }
+    @media (prefers-color-scheme: dark) {
+      .echo-back  { stroke: #5647c2; }
+      .echo-front { stroke: #9c8fff; }
+    }
+  </style>
+  <g fill="none" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+    <polyline class="echo-back"  points="42,74 64,30 86,74"></polyline>
+    <polyline class="echo-front" points="14,74 36,30 58,74"></polyline>
+  </g>
+</svg>
