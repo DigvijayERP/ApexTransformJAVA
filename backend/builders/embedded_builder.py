@@ -60,9 +60,22 @@ BROWSE_SEARCH_OPERATORS: Dict[str, List[str]] = {
 }
 
 # The capture's decimal field carried this; character fields carried "".
+# The capture had no integer, logical or datetime fields, and QAD REJECTS an
+# empty format on numeric types (error 393 "Invalid value for field data type:
+# integer (DisplayFormat)", OrderNotes live run 2026-08-31). For the types the
+# capture never showed, these are the formats Case 1's standalone builder has
+# deployed live (naming.display_format). Character stays "" per the capture.
 _DEFAULT_DISPLAY_FORMAT = {
     "decimal": "->>,>>9.99<<<<",
     "date": "99/99/9999",
+    "integer": "->,>>>,>>9",
+    "int64": "->,>>>,>>9",
+    "datetime": "99/99/9999 HH:MM:SS",
+    "datetime-tz": "99/99/9999 HH:MM:SS.SSS+HH:MM",
+    "logical": "mfg-YES/mfg-NO",
+    "dropdown_integer": "->,>>>,>>9",
+    "dropdown_int64": "->,>>>,>>9",
+    "dropdown_logical": "mfg-YES/mfg-NO",
 }
 
 _NUMERIC_TYPES = {"integer", "int64", "decimal"}

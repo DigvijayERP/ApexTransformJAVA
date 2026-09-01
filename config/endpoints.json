@@ -327,7 +327,7 @@
           "notes": "NOTE THE CASING: viewURI here, but viewUri on the entity endpoints. Response is data.eventHandlerV2s[] — an ARRAY, so 'exactly one row per 4-tuple' is INFERRED, not confirmed (VERIFICATION_ROUND2.md, B1 flag 7). Carries `concurrencyHash`, the optimistic-locking token that makes read-modify-write possible. eventHandlerType is BEFORE | AFTER | PRIMARY.",
           "classification": "static",
           "source": "aux_web_version/backend/probe_parent_eh.py:44-51",
-          "status": "confirmed-in-code-never-executed"
+          "status": "captured"
         },
         {
           "id": "eventhandler.update",
@@ -338,7 +338,7 @@
           "notes": "Payload echoes `uri` + `concurrencyHash` from the read. NEVER RUN — this is a WRITE against a standard QAD parent view and needs explicit greenlight (QUESTIONS.md Q-L). Phase 5's chosen strategy is a NEW Pre/Post handler, which does not need this at all.",
           "classification": "static",
           "source": "aux_web_version/backend/probe_parent_eh.py:74-91",
-          "status": "confirmed-in-code-never-executed"
+          "status": "captured"
         }
       ]
     }

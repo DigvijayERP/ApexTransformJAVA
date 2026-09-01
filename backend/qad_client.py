@@ -30,6 +30,7 @@ the header is still shown so the shape is verifiable.
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
@@ -252,6 +253,18 @@ async def call(
             ok=True,
             dry_run=True,
             request=_describe(verb, url, headers, payload),
+        )
+
+    # Tripwire for test harnesses. Set ADAPTIVE_OFFLINE=1 and any call that
+    # would CHANGE QAD raises instead of sending; reads still work. Added
+    # 2026-08-31 after a review probe stubbed one endpoint, forgot the rest,
+    # and live-deployed a test BC. The engine never sets this; it exists so a
+    # test that forgets a stub fails loudly instead of writing to QAD.
+    if verb != "GET" and os.environ.get("ADAPTIVE_OFFLINE"):
+        raise RuntimeError(
+            f"Blocked a live {verb} to '{endpoint_id}': ADAPTIVE_OFFLINE is set. "
+            f"This process is not allowed to change QAD. Stub the call or run "
+            f"it as a dry run."
         )
 
     token = await get_token()
