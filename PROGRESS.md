@@ -1123,6 +1123,303 @@ cleaned up. All seven suites pass.
 gate has no in-place Java editor (the backend accepts hand-edited source; the
 steer box regenerates instead). Both are UI work, not contract risk.
 
+### 🎉 Q-L SETTLED LIVE — the event handler read-modify-write contract is proven (2026-08-31)
+
+(Incidental, same period: the frontend adopted AUX's ApexTransform header — sticky bar, brand
+lockup, segmented toggle — and the API token moved off the start screen into a header settings
+menu. Pushed to github.com/DigvijayERP/ApexTransformJAVA along with the whole tree, owner's call
+2026-08-31 after a pre-push audit; local branch `master` tracks `origin/main`.)
+
+The owner greenlit the probe ("do what you think is optimal"). `backend/probe_eventhandler.py`
+ran both phases against the live environment through Adaptive's own transport (registry ids,
+cached token). Everything below is [CONFIRMED] on eeadaptive, not inherited from AUX's env.
+
+**Phase A — reads:**
+1. **GET contract live.** `eventhandler.read` returned our Case-1 DigOrderTesting handler:
+   one row, `concurrencyHash`, `typeScriptCode` (8,124) + `javaScriptCode` (42,804), plus
+   `mappingCode`, `disallowedActions`, `appURI`, `viewURI`.
+2. **The row `uri` IS the 4-tuple**, percent-encoded:
+   `...IEventHandlerV2:urn:app:com%2Eyash%2Edigwish.urn:view:viewmeta:...DigOrderTesting.BEFORE.WEB`
+   — structural support for one-row-per-(app,view,timing,appliesTo); B1/flag-7's "inferred" is
+   now nearly settled.
+3. **Absence is an ERROR, not an empty array.** HTTP 200, `ok=false`, message
+   "Event handler for app …, view … and type … does not exist". The fetch stage must branch on
+   this as "no handler yet → create path", never treat it as a failure.
+4. **Scoping is by app.** The error text names the appURI; standard/base handlers are invisible
+   under ours. "Existing code we must preserve" therefore means OUR app's row on that view —
+   QAD's own handlers cannot be clobbered through this endpoint with our identity.
+5. **PurchaseOrders view URI CONFIRMED**: `urn:view:viewmeta:com.qad.erp.purchasing.PurchaseOrders`
+   (candidate guessed by analogy, then returned a real row). SalesOrders/PurchaseOrderHeaders
+   candidates returned does-not-exist under our app.
+
+**Phase B — the greenlit no-op write (our own handler only):**
+6. **UPDATE semantics, not create-only.** POST echoing `uri` + `concurrencyHash` with unchanged
+   code → `submitResult.success=true`, re-GET shows **still exactly one row**. No
+   view.register-style trap. Code round-tripped byte-identical, TS and JS both.
+7. **The hash did NOT rotate on a byte-identical update** — likely content-derived rather than
+   write-counting. Stale-hash rejection is therefore UNOBSERVED (D11); the feature must GET
+   immediately before every POST rather than trusting a stored hash.
+
+**The scaffold discovery.** The PurchaseOrders row (`isActive=false`, TS 1,154 / JS 76,292) is a
+QAD-generated handler scaffold under OUR app — presumed the owner's deactivated experiment
+(their answer 3: "no ACTIVE handler for the grid one"). Its TS is the authoritative code shape
+for a standard-parent handler:
+- module name encodes view + app + timing:
+  `com.qad.erp.purchasing.EventHandler.PurchaseOrders.ComYashDigwish.Maint_BEFORE`
+- class name is LOAD-BEARING, own comment: "Do not change this class name or the event handler
+  will no longer run" (`PurchaseOrdersMaintHandler`)
+- pattern: `QraViewTSHandlerWithViewFormTSHandler<DTO.PurchaseOrdersMaint, PurchaseOrdersFormHandler>`
+  overriding `createViewFormTSHandler()`, plus `QraViewFormTSHandlerV2<DTO.…>` — the wired-classes
+  model PHASE0_SUMMARY predicted; ambient `Qad.QraView.TSHandler.*`, per-view `DTO`/`Constants`
+- the stored JS is a BUNDLE: 76 KB of compiled ES5 namespace chains including `Constants.FieldNames`
+  and DTO code far beyond the visible TS. Merge design consequence: never re-transpile the whole;
+  preserve their JS bytes and append compiled additions (ES5 IIFE namespace chains merge cleanly).
+
+**Design consequences for the embedded-validation feature (owner decisions 2026-08-31):**
+standalone flow first (targets already-deployed embedded children), later the same stage wired
+into embedded runs; timing defaults to BEFORE; merge = byte-preserve outside delimited insertion
+points, diff shown at the gate; store keeps the pre-merge original for one-POST rollback.
+Registry: `eventhandler.read` and `eventhandler.update` upgraded to **captured**.
+D4/D4a retire — the probe has now demonstrably run, in this repo, on this environment.
+
+**Still open before the generator is designed:** grid claiming (D3/Q-F — whether our module may
+claim the parent grid/embedded grid it needs) and the exact grid-handler wiring, to be extracted
+from the class-7 guide sections around lines 270–700 next.
+
+### Case 4 designed: the class-7 guide's own example IS our use case (2026-08-31)
+
+Doc extraction after the probe. The decisive find: class 7 pp.18-23 ("Using of data from the
+extension") is a save-time validation on a parent (Countries) reading an embedded extension AND
+an embedded grid — precisely the feature. Its verbatim pattern: `onBeforeUpdate` (fires "for
+either a create or update operation", API ref:26-31 — there is NO onBeforeCreate), block with
+`eventData.eventProcessed = true`, report via `Qad.Common.DTO.Error` + `ErrorGroupPanel`.
+Embedded data reads flat off `this.NgData._<module_underscored>_<ChildBC>` — NO grid handler,
+NO `ViewGridsToHandleList` (which API ref:832 says is opt-OUT anyway). **D3/Q-F stops blocking
+this case** — grid claiming only matters for live grid EVENTS, out of scope.
+
+Bundle analysis of our PO scaffold: exported classes are attached to the namespace object
+(`Maint_BEFORE.PurchaseOrdersFormHandler = …`), so the JS merge can be an appended prototype
+patch and QAD's 76KB compiled bundle (DTO/Constants we have no sources for) is never
+re-transpiled. No `DigPo*` strings in the bundle, so the child-collection naming stays
+[INFERRED]; the generator resolves the key at runtime by suffix and the first behavioural test
+settles it.
+
+Full design: **`PHASE5_CASE4_BUILD_PLAN.md`** — wire contract table, scaffold code shape,
+deterministic 3-insertion-point merge with ADAPTIVE MANAGED markers, real-tsc compile gate
+(never the Case-1 LLM transpile near existing code), 4 gates mirroring Case 3, `handler_writes`
+store for one-POST rollback.
+
+### Case 4 merge engine built and reviewed (2026-08-31)
+
+`builders/screen_rule_builder.py` + test file. It merges validation rules into a parent view's
+event handler without changing any existing code. Rules live in `// === RULE: <slug> ===` marker
+blocks; one regenerated dispatcher method runs them all and drives the error grid; the JS side
+only appends prototype patches to QAD's compiled bundle, never rebuilds it. Compile gate runs
+real tsc (node + frontend's typescript) against generated stub types.
+
+Built by one agent from a written spec, then two independent reviewers tried to break it.
+They found and reproduced 3 real bugs, all fixed and now covered by tests:
+1. a regex like `/[}]/` in existing code confused the brace counter, so our code landed inside
+   the wrong method and the merged file did not compile;
+2. marker-shaped text inside a user's string literal was treated as a real block and the
+   user's bytes were silently deleted;
+3. a rule body containing a marker-shaped line was accepted, and afterwards the handler could
+   never be updated or cleaned again (strip raised every time).
+
+16 test sections pass, including byte-for-byte round trips with CRLF, double-merge equals
+single-merge, and a merged handler compiling clean with real tsc. smoke, pipeline and
+extension_builder suites still pass. Still to build: step 1 validation detection, step 5 stage
+wiring, UI, then the live test.
+
+### Case 4 wired into the embedded flow, and one incident to own up to (2026-08-31)
+
+**The build.** Embedded mode now has stage 5 "Screen validation" (conditional, gated,
+locks upstream). Step 1's prompt finds validation rules in the prose and pasted ABL and
+returns a `screen_rules` array the gate shows for approval. Stage 5 fetches the parent's
+handler, re-applies rules kept from earlier runs (`extract_rules`), adds the new ones with
+deterministic ES5 bodies (required / positive / non_negative / not_in_past; only `custom`
+uses the model), compiles the merged file with real tsc, and shows action, rules, added
+blocks, untouched code and compile result at the gate. Commit re-GETs the handler, refuses
+on drift, sends the probe-proven payload (uri+hash echoed on update, omitted on create,
+isActive true) and records before/after in the new `handler_writes` table (posting the
+before code back is the undo). Frontend renders the new gate and the step 1 rules list.
+`parents.json`: only PurchaseOrderHeaders carries `view_uri` (the confirmed one); the
+stage skips itself with a plain reason for parents whose screen name is not on record.
+All suites green: smoke, pipeline (create + update scenarios), screen_rule_builder,
+extension_builder, progress_parser, and frontend tsc.
+
+**🔴 INCIDENT.** A review agent's probe stubbed only the eventhandler endpoints, created a
+run with dry_run=False, and the earlier stages went out live. Confirmed from its recorded
+writes and a fresh read-back: BC **`com.yash.digwish.PoInspect`** (child of
+PurchaseOrderHeaders, one field InspectionDate) was created AND deployed, and BERelation
+`urn:be:com.qad.qra.berelation.IBERelation:a29973ee-7e14-43e8-a18b-6f804c646143` created.
+A second live bc.create was rejected by QAD as a duplicate (nothing made). The Purchase
+Orders screen presumably now shows a PoInspect tab. **No handler was touched**: the live
+eventhandler.register was refused by stage 5's own re-GET drift guard (recorded ok=0,
+empty request), which is that guard working in production the first time it met reality.
+Cleanup of PoInspect + its relation is PENDING the owner's explicit go; no delete path
+for a deployed BC is known in this project's records, so the first step would be a
+read-only probe of what QAD's UI or API offers.
+
+**Guard added so this cannot repeat:** `ADAPTIVE_OFFLINE=1` makes qad_client raise on any
+live non-GET call before token or network work; reads and dry runs still pass
+(qad_client.py, smoke_test section covers both sides). Test harnesses should set it.
+
+### Live bug: embedded integer fields sent an empty DisplayFormat, QAD error 393 (2026-08-31)
+
+The owner's first real Case-4 run (OrderNotes on Sales Order Headers, integer child PK
+SequenceNumber) failed at the field stage: QAD error 393, "Invalid value for field data
+type: integer", fieldName DisplayFormat. Root cause: `embedded_builder`'s
+`_DEFAULT_DISPLAY_FORMAT` only knew the two types the capture happened to contain
+(decimal, date); every other type fell through to "", which QAD accepts for character
+but rejects for numerics. Case 1 never hit it because `bc_builder` uses the full
+`naming.display_format` table. This was the first embedded run ever to carry an integer.
+
+Fix: the embedded table now covers integer, int64, datetime, datetime-tz, logical and
+the numeric dropdowns with Case 1's live-proven formats; character stays "" per the
+capture. Smoke test asserts all three behaviours. The failed write locked nothing
+(rejected writes are ignored by the regenerate lock), so the run recovers with a
+plain Regenerate on the field stage.
+
+Note for the dry-run story: a full dry run of this exact prompt passed, because only
+QAD knows this rule. Dry run rehearses OUR side; the first live call of any new shape
+is still a real test.
+
+### Sales Orders screen name CONFIRMED by the owner's own capture (2026-09-01)
+
+The owner opened QAD's handler editor on Sales Order Headers with DevTools open. QAD's own
+editor requested `eventhandler?viewURI=urn:view:viewmeta:com.qad.erp.sales.SalesOrders`
+and got 200, and its generated scaffold opens
+`module com.qad.erp.sales.EventHandler.SalesOrders.ComYashDigwish.Maint_BEFORE` - the
+module-name derivation matches ours exactly. `parents.json` now carries the view_uri for
+SalesOrderHeaders. The editor was closed WITHOUT saving (a fresh read shows no handler
+row), so the first Case-4 registration on Sales Orders takes the create path.
+
+Two more things the capture taught:
+- **`initialize=true`**: the editor's GET carries it and QAD returns a GENERATED scaffold.
+  That is a scaffold-from-the-API path we have not needed yet; recorded here, not in the
+  registry, until something uses it.
+- **A registry gap the first Sales Orders run exposed**: stage 5 read the parent from step
+  1's stored artifact, which was snapshotted before the screen name was confirmed, and
+  step 1 cannot be regenerated once live writes lock the run. The stage now reads the
+  registry fresh (config, not run state) and falls back to the stored copy; the skip
+  message lists the screens on record instead of hardcoding "Purchase Orders".
+
+Earlier the same day the OrderNotes run itself went clean end to end after the
+DisplayFormat fix: BC deployed, grid and tab live on the Sales Order screen, step 1 caught
+the "author required" rule verbatim. Step 5 skipped awaiting this confirmation - by
+design, not by failure.
+
+### 🎉 CASE 4 PROVEN LIVE END TO END, and the "not working" mystery solved (2026-09-01)
+
+The owner's runs settled everything left open:
+
+1. **PalletDetails on Purchase Orders and SalesOrderPalletDetails on Sales Orders** both
+   went through all five stages live. The weight rule (positive check) FIRED on the Sales
+   Orders screen; a later run added a follow-up-date rule (not_in_past) to the same
+   handler, the gate showed "update" with the weight rule in the kept list, and after
+   approval BOTH rules worked. Merge, kept-rules, dispatcher, deterministic bodies,
+   suffix collection lookup and camelCase field access are all now confirmed behaviourally.
+2. **The "validation not working" episode was a STALE BROWSER SCREEN**, nothing else.
+   Proof chain: the stored bundle executed correctly in Node with stubbed globals
+   (class + methods all present); the editor-compiled bundle differs only by an inline
+   source map; the API stores our bytes verbatim (PO row still byte-identical); and the
+   owner's controlled test - approve, then Ctrl+F5, NO editor visit - fired the rule.
+   A QAD screen loads its handler once; it must be refreshed after a handler change.
+3. **QAD's Compile button is a client-side type check** (Monaco + TS web worker,
+   noEmit) - no network call, produces no code. The owner extracted QAD's real .d.ts
+   set and exact compiler options into a working local checker
+   (Downloads/QAD_COMPILE_CHECK_HANDOFF.md + Desktop/Python_Snake/URI & Compile/
+   browse_uri_adaptive): pinned typescript 5.7.2, 15-file base.json, validated to give
+   the editor's exact verdicts. Known gaps documented in its section 7 (per-component
+   DTO/Constants generation; the editor's dto/constants requests are the better source).
+4. The step 5 gate description now tells the user to refresh the QAD screen after
+   approving.
+
+Still true and unchanged: the editor's Save stores an editor-compiled bundle (ours is
+functionally equivalent); no server-side transpile happens on the plain API save.
+
+### The QAD compile kit is wired in as the screen-rule type check (2026-09-01)
+
+The owner's extracted checker (QAD's real 15-file typings, the editor's exact compiler
+options, typescript pinned 5.7.2) is vendored at `backend/qad_compile/` and is now the
+primary check in `compile_check()`. The old any-typed stub check stays as a loud
+last-resort fallback (`CompileResult.checker` says which ran; the gate shows a note on
+the fallback). A broken kit environment is a failure, never a pass.
+
+What the kit catches that the stub could not, both now locked in tests: a made-up
+method on a real framework object (`ErrorGroupPanel.noSuchPanelMethod()` - stub passes
+it, kit rejects it with the editor's own error) and ES5-missing runtime calls. One
+finding against the handoff: plain tsc also flags `Number.isInteger` under ES5 defaults,
+so the REAL stub gap was the any-typed framework objects, which is what test 19 proves.
+
+Generation and merge are unchanged - proven live the same day, they stay as they are.
+The kit's per-component typings generator is deliberately NOT vendored (its own handoff
+documents gaps); the view DTO/Constants namespaces still come from our any-typed stub.
+Better source when wanted: the dto/constants files QAD's editor fetches.
+
+### The browse catalog: 3,357 standard browse URIs, format PROVEN LIVE (2026-09-01)
+
+The owner supplied a legacy QAD browse export
+(`Browse_de_t_20260812071338_shartrip.csv`, 3,357 rows). Verified before building
+anything on it:
+
+- **`urn:browse:mfg:<Browse Name>` is a real browse URI on this environment.** Read
+  through `lookup.browse_fields`: cm007 -> 111 fields, ad057 -> 36, so805 -> 37,
+  pt001 -> 13. Control `urn:browse:mfg:zz999` (not in the CSV) -> 0 rows, so the
+  endpoint tells real from fake and any candidate can be VERIFIED before use, free.
+- QAD's own class-4 guide uses `urn:browse:mfg:ad057` and `urn:browse:mfg:cm007` in
+  worked lookup definitions (Docs/..._class_4_...md:57-65), and both are in the CSV.
+
+🔴 **Trap, recorded so nobody adds it later: the CSV's `Lookup` column is NOT a
+filter.** cm007 is `Lookup=No` and the guide uses it as a lookup browse anyway. The
+flag is a ranking hint only; filtering on it would drop QAD's own example. A test
+exists purely to keep that filter from ever being added.
+
+In the built ranking the flag ended up scoring **nothing at all**, which is stricter
+than "hint only" and was forced by the data: eight browses describe themselves as
+exactly `Customer` (cm001, cm004, cm005, cm007, cm114, cm300, cm301, wh039) and three
+of them carry the flag. Letting the flag move rows - as a point of score or as a
+tie-break - pushes cm007, the browse the guide actually uses, past fifth place and out
+of a five-item picker. So it is carried into every result for the UI to show and left
+out of the ordering. Ordering is: score, then the shorter description, then code.
+
+**Why this matters.** Two places needed a browse URI the app could not produce, and
+both said so in their own words: `stage_lookups`'s hint ("Pointing at a standard QAD
+component needs its Browse URI") and the handler prompt's `{{BROWSE_URI:field}}`
+placeholders ("the user supplies the real URI"). Both become a ranked picker.
+
+Built: `config/browses.json` (vendored, so it does not depend on a Downloads folder),
+`core/browse_catalog.py` (deterministic scored search, no LLM and no network to rank;
+a lazy `verify()` for the live check), candidates surfaced in the lookup gate, and a
+test suite. Deliberately NOT done: dumping the catalog into prompts. Only the top few
+candidates for the fields actually in play ever reach a prompt.
+
+**Built and reviewed the same day.** `config/browses.json` (671 KB, 3,357 entries),
+`core/browse_catalog.py` (deterministic scored search, lazy `verify()` for the free live
+check), candidates wired into BOTH places that needed them: the lookup gate's
+`awaiting_configuration` artifact and the handler stage's `browse_placeholders`, each
+clickable in the UI to fill the input. Nothing was added to any prompt.
+
+A reviewer caught and reproduced one real bug before it shipped: `<entity>Name` field
+codes returned pure junk. `suggest_for_field` weights the LAST word of a field code
+(a BillToCustomer field is a kind of customer), but for `supplierName` the last word is
+the attribute, so "Code Name" and "Group Name" browses beat "Supplier". Generic attribute
+words (name, description, date, status, type, amount, qty, text, label, value, flag) now
+count as noise. After the fix, checked end to end against the live system:
+
+    supplierName   -> vd001 Supplier            live, 83 fields
+    itemName       -> pp125 Item                live, 133 fields
+    shipToAddress  -> ea314 Ship To Address     live, 18 fields
+    billToCustomer -> sb011 Self-Bill Customer  live, 25 fields
+
+Two honest notes from the build. The `is_lookup` flag scores NOTHING in the end: eight
+browses have the description "Customer" and three carry the flag, so as a tie-break it
+pushed cm007 (the guide's own choice) out of the top five. It is carried in every result
+so the UI can show it, and nothing filters on it. And table matching only adds score to a
+browse that already matched on description or term, deliberately: a table name alone
+pulling rows in would return browses with no visible connection to the query.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |
@@ -1139,3 +1436,5 @@ steer box regenerates instead). Both are UI work, not contract risk.
 | D7 | AUX-side defects found during the audit (unrendered lookup events, discarded `deployCheckForWarnings` responses, untracked Phase 11 files, `frontend.zip` unignored) | **Out of scope — this project does not modify AUX** | Recorded in `QUESTIONS.md` Part 2 for the AUX owner |
 | D8 | `lookupResultFields` element VALUE formats (dotted browse column; form field target name) | The first successful lookup save carried no fills, so the renamed keys were never exercised live | Owner's call 2026-08-12: keep open, harden later. Next lookup that ticks a fill settles it |
 | D9 | Handler rule enforcement never witnessed on a save | `DigOrderTesting` registered its handler live, but nobody has yet saved a negative quantity or past date to see it fire | Same owner's call. One deliberate bad save on the Dig order testing screen settles it |
+| D11 | Stale-`concurrencyHash` rejection unobserved | The no-op update succeeded with the CURRENT hash and the hash does not rotate on identical content, so optimistic-lock enforcement was never exercised | Feature GETs immediately before every POST; if a stale-hash write is ever contemplated, probe first |
+| D12 | Own standalone BCs as embedded parents | Owner asked 2026-09-01 whether a custom standalone BC can parent an embedded child. Today the parent menu is the fixed standard-screen registry, so no. When built, we are better placed than for standard screens: field spec stored in the run DB, view URI derivable and probe-proven (DigOrderTesting), handler read/write proven. One design piece: the merge must learn to extend our own Case-1 generated handlers, which its hand-written-save-code refusal currently blocks | When the owner asks for it |
