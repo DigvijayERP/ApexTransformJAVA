@@ -406,17 +406,24 @@ async def main() -> int:
           out["artifact"]["payload_preview"]["dataStoreURI"],
           "urn:datastore:com.yash.extension")
     # No view stage: the platform forbids a separate menu view for an embedded
-    # child in either order (settled live across three runs, 2026-08-13), so
-    # deploy is terminal and the child's data lives on the parent's grid.
+    # child in either order (settled live across three runs, 2026-08-13); the
+    # child's data lives on the parent's grid. Deploy is no longer the last
+    # stage - the screen validation stage follows it, and skips itself here
+    # because step 1 found no rules.
     res = await engine.approve_stage(run4, "deploy", **db)
-    check("deploy is terminal in embedded mode", res["complete"], True)
-    check("and the run is complete",
+    check("deploy hands over to the screen validation stage",
+          res["next"], "screenrule")
+    out = await engine.run_stage(run4, "screenrule", **db)
+    check("screen stage skips itself when step 1 found no rules",
+          out["skipped"], True)
+    check("with a reason", "nothing to add" in out["reason"], True)
+    check("and the run is then complete",
           (await store.get_run(run4, **db))["status"], store.RUN_COMPLETE)
 
     listing = await store.run_stages(run4, **db)
-    check("the embedded rail has four stages", len(listing), 4)
+    check("the embedded rail has five stages", len(listing), 5)
     check("statuses as run", [s["status"] for s in listing],
-          ["approved", "approved", "approved", "approved"])
+          ["approved", "approved", "approved", "approved", "skipped"])
     e_writes = await store.writes_for_run(run4, **db)
     check("four calls rehearsed, in stage order",
           [w["endpoint_id"] for w in e_writes],
@@ -466,6 +473,137 @@ async def main() -> int:
            "deploy.business_entity"])
     llm.set_stub(stub)
 
+    section("14. Case 4 - screen validation, create path")
+    import shutil as _shutil
+    import qad_client
+    from builders import screen_rule_builder as srb
+    if not _shutil.which("node"):
+        # Prefer the real tsc. Without node the merge is still exercised in
+        # full and only the compile check is stubbed.
+        srb.compile_check = lambda ts: srb.CompileResult(ok=True, errors=[])
+
+    real_call = qad_client.call
+    REGISTERED: list = []
+
+    def _qad_stub(read_result):
+        """eventhandler.read answers with the given result; register records
+        its payload. Everything else keeps the offline dry-run behaviour."""
+        async def call(endpoint_id, *, method=None, payload=None, params=None,
+                       dry_run=False, timeout=60.0):
+            if endpoint_id == "eventhandler.read":
+                return read_result
+            if endpoint_id == "eventhandler.register":
+                REGISTERED.append(payload)
+                return qad_client.QadResult(
+                    ok=True, dry_run=dry_run,
+                    request={"method": "POST", "url": "stubbed",
+                             "headers": {"Authorization": "Bearer <token>"},
+                             "payload": payload})
+            return await real_call(endpoint_id, method=method, payload=payload,
+                                   params=params, dry_run=dry_run,
+                                   timeout=timeout)
+        return call
+
+    # The live shape for a missing handler: HTTP 200, ok False, and an error
+    # naming "does not exist" (probe_eventhandler.py, 2026-08-31).
+    missing = qad_client.QadResult(
+        ok=False, status_code=200,
+        error="Event handler does not exist for the given view",
+        data={"data": {"eventHandlerV2s": []}})
+    qad_client.call = _qad_stub(missing)
+    llm.set_stub(_screenrule_stub)
+
+    run6 = await store.create_run("Extend purchase orders with inspection details",
+                                  mode="embedded", dry_run=True, **db)
+    await engine.run_stage(run6, "requirements", **db)
+    await engine.approve_stage(run6, "requirements", **db)
+    await engine.run_stage(run6, "fields", **db)
+    await engine.approve_stage(run6, "fields", **db)
+    await engine.run_stage(run6, "relate", **db)
+    await engine.approve_stage(run6, "relate", **db)
+    await engine.run_stage(run6, "deploy", **db)
+    res = await engine.approve_stage(run6, "deploy", **db)
+    check("deploy advances to the screen stage", res["next"], "screenrule")
+
+    out = await engine.run_stage(run6, "screenrule", **db)
+    art = out["artifact"]
+    check("the stage applies to this run",
+          [s["applies"] for s in await store.run_stages(run6, **db)
+           if s["id"] == "screenrule"], [True])
+    check("action is create", art["action"], "create")
+    check("view uri comes from the registry entry", art["view_uri"],
+          "urn:view:viewmeta:com.qad.erp.purchasing.PurchaseOrders")
+    check("rule resolved to the spec field",
+          art["rules"][0]["resolved_field"], "InspectionDate")
+    check("merged file compiles", art["compile"]["ok"], True)
+    check("the rule block is in the added code",
+          "// === RULE: inspection-date-required START ===" in art["added_ts_blocks"],
+          True)
+    check("running wrote nothing yet", REGISTERED, [])
+
+    res = await engine.approve_stage(run6, "screenrule", **db)
+    check("approved", res["approved"], True)
+    check("screen stage completes the run", res["complete"], True)
+    row = REGISTERED[-1]["eventHandlerV2s"][0]
+    check("payload switches the handler on", row["isActive"], True)
+    check("create payload has no uri", "uri" in row, False)
+    check("create payload has no concurrencyHash", "concurrencyHash" in row, False)
+    check("payload carries the merged TS",
+          "rule_inspection_date_required" in row["typeScriptCode"], True)
+    check("and the JS prototype patch",
+          "rule_inspection_date_required" in row["javaScriptCode"], True)
+
+    section("15. Case 4 - screen validation, update path")
+    po_identity = srb.HandlerIdentity(
+        view_pascal="PurchaseOrders", view_namespace="com.qad.erp.purchasing",
+        app_pascal="ComYashDigwish", timing="BEFORE")
+    scaffold = srb.build_scaffold_ts(po_identity)
+    existing_row = {
+        "uri": "urn:eventhandler:0001",
+        "appURI": "urn:app:com.yash.digwish",
+        "viewURI": "urn:view:viewmeta:com.qad.erp.purchasing.PurchaseOrders",
+        "eventHandlerType": "BEFORE", "appliesTo": "WEB",
+        "isActive": False,
+        "concurrencyHash": "hash-before",
+        "typeScriptCode": scaffold, "javaScriptCode": "",
+        "mappingCode": "", "disallowedActions": "",
+    }
+    found = qad_client.QadResult(
+        ok=True, status_code=200,
+        data={"data": {"eventHandlerV2s": [existing_row]}})
+    qad_client.call = _qad_stub(found)
+
+    run7 = await store.create_run("Extend purchase orders with inspection details",
+                                  mode="embedded", dry_run=True, **db)
+    await engine.run_stage(run7, "requirements", **db)
+    await engine.approve_stage(run7, "requirements", **db)
+    await engine.run_stage(run7, "fields", **db)
+    await engine.approve_stage(run7, "fields", **db)
+    await engine.run_stage(run7, "relate", **db)
+    await engine.approve_stage(run7, "relate", **db)
+    await engine.run_stage(run7, "deploy", **db)
+    await engine.approve_stage(run7, "deploy", **db)
+
+    out = await engine.run_stage(run7, "screenrule", **db)
+    art = out["artifact"]
+    check("action is update", art["action"], "update")
+    check("existing_ts is the fetched handler, untouched",
+          art["existing_ts"] == scaffold, True)
+    check("the fetched hash is surfaced", art["base_hash"], "hash-before")
+    check("gate can say the handler will be switched on",
+          art["was_active"], False)
+    res = await engine.approve_stage(run7, "screenrule", **db)
+    check("approved", res["approved"], True)
+    row = REGISTERED[-1]["eventHandlerV2s"][0]
+    check("update echoes the uri", row["uri"], "urn:eventhandler:0001")
+    check("update echoes the fresh hash", row["concurrencyHash"], "hash-before")
+    check("update switches the handler on", row["isActive"], True)
+    check("the existing scaffold is inside the merged TS",
+          scaffold.rstrip("\n").splitlines()[0] in row["typeScriptCode"], True)
+
+    qad_client.call = real_call
+    llm.set_stub(stub)
+
     print()
     if FAILURES:
         print(f"FAILED: {len(FAILURES)} check(s) — {', '.join(FAILURES)}")
@@ -503,6 +641,41 @@ async def _embedded_stub(system: str, user: str, role: str, json_mode: bool) -> 
                 {"code": "HandlingClass", "dataType": "character",
                  "isPrimary": False, "isRequired": False},
                 {"code": "HazardFlag", "dataType": "logical",
+                 "isPrimary": False, "isRequired": False},
+            ],
+        }})
+    return await stub(system, user, role, json_mode)
+
+
+E_REQ_PO = {
+    "parent_entity_key": "PurchaseOrderHeaders",
+    "bc_pascal": "PoInspect",
+    "description": "Inspection details per purchase order",
+    "child_pk": {"code": "PoInspectCode", "dataType": "character"},
+    "custom_fields": [
+        {"code": "InspectionDate", "dataType": "date"},
+    ],
+    "screen_rules": [
+        {"slug": "inspection-date-required", "field": "InspectionDate",
+         "description": "Inspection Date must be filled on every row",
+         "message": "Inspection Date is required.", "check": "required"},
+    ],
+}
+
+
+async def _screenrule_stub(system: str, user: str, role: str, json_mode: bool) -> str:
+    """Same dispatch as _embedded_stub, but the parent is PurchaseOrderHeaders
+    (the one parent with a confirmed view_uri) and step 1 finds one rule."""
+    opening = system.split("\n", 1)[0].strip()
+    if "for an Embedded QAD Business Component pipeline" in opening:
+        CALLS.append(opening[:60])
+        if opening.startswith("You are a Requirements Gathering Agent"):
+            return json.dumps(E_REQ_PO)
+        return json.dumps({"status": "ok", "spec": {
+            "bc_pascal": "PoInspect",
+            "description": "Inspection details per purchase order",
+            "fields": [
+                {"code": "InspectionDate", "dataType": "date",
                  "isPrimary": False, "isRequired": False},
             ],
         }})

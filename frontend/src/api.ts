@@ -44,7 +44,7 @@ const post = <T,>(path: string, body?: unknown) =>
 export type ArtifactKind =
   | "text" | "field_spec" | "field_spec_diff" | "form_layout"
   | "handler_code" | "view_config" | "lookup_config" | "deploy_preview"
-  | "embedded_requirements" | "relation_config"
+  | "embedded_requirements" | "relation_config" | "screen_rule"
   | "serverside_target" | "serverside_code" | "serverside_build"
   | "serverside_deploy";
 

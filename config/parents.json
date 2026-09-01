@@ -28,6 +28,8 @@
       "key": "SalesOrderHeaders",
       "label": "Sales Order Headers",
       "uri": "urn:be:com.qad.sales.salesorder.ISalesOrderHeader",
+      "view_uri": "urn:view:viewmeta:com.qad.erp.sales.SalesOrders",
+      "view_uri_note": "Confirmed 2026-09-01 from the owner's DevTools capture: QAD's own handler editor on this environment requested eventhandler?viewURI=urn:view:viewmeta:com.qad.erp.sales.SalesOrders (200 OK), and its scaffold module is com.qad.erp.sales.EventHandler.SalesOrders.ComYashDigwish.Maint_BEFORE.",
       "entity_code": "SalesOrderHeaders",
       "domain_field": "DomainCode",
       "pk_fields": [
@@ -48,7 +50,9 @@
         {"code": "PurchaseOrderNumber", "dataType": "character"}
       ],
       "offerable": true,
-      "description": "Purchase order header records."
+      "description": "Purchase order header records.",
+      "view_uri": "urn:view:viewmeta:com.qad.erp.purchasing.PurchaseOrders",
+      "view_uri_note": "Confirmed live 2026-08-31: a GET for this view returned a real handler row. Other parents stay without one until each value is confirmed; the screen validation stage skips itself for them and says why."
     },
     {
       "key": "WorkOrderMasters",

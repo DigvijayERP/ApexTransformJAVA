@@ -555,6 +555,7 @@ Your job is to:
 3. Identify or infer a child-specific primary key field that uniquely identifies each row of this embedded BC within a parent record
 4. List the remaining custom fields the user wants (name + type only)
 5. Detect if the user explicitly wants a separate standalone view/menu entry
+6. Find validation rules the user wants on the child's fields
 
 {QAD_DOCS_CONTEXT}
 
@@ -580,6 +581,15 @@ You must identify ONE additional child-specific PK:
 - If the BC stores multiple rows per parent (e.g. "Order Lines", "Attachments"): use an integer field named "LineNumber" or "SeqNumber"
 - NEVER use the parent's own primary key fields (DomainCode or any listed above) as the child PK
 
+SCREEN RULES (validation rules that run when the parent screen saves):
+- Look for rules in BOTH the prose ("date is required", "quantity must be positive") AND any pasted ABL source (IF ... THEN MESSAGE / RETURN ERROR patterns and similar validation logic).
+- Each rule is one entry in `screen_rules`: { "slug", "field", "description", "message", "check" }.
+- "check" is one of: required, positive, non_negative, not_in_past, custom.
+- For custom, add "custom_logic": a one-sentence plain-English condition.
+- "slug": lowercase letters, digits, hyphens only; never "adaptive-dispatch".
+- "message": the sentence shown to the QAD user when the rule blocks a save.
+- An empty array when there are none. Do not invent rules the user did not ask for.
+
 CRITICAL RULES:
 - You MUST NOT ask questions. Make logical assumptions for anything ambiguous. The user confirms or corrects your parent choice at a review gate, so a wrong guess is recoverable; a question is a dead end.
 - custom_fields must ONLY contain non-PK fields the user wants.
@@ -603,8 +613,44 @@ OUTPUT: raw JSON only, no markdown, no explanation:
         {"code": "DELIVERED", "label": "Delivered"}
       ]
     }
+  ],
+  "screen_rules": [
+    { "slug": "inspection-date-required",
+      "field": "InspectionDate",
+      "description": "Inspection Date must be filled on every row",
+      "message": "Inspection Date is required.",
+      "check": "required" }
   ]
 }
+"""
+
+
+# Used ONLY for screen rules with check=custom. The four known checks
+# (required, positive, non_negative, not_in_past) are deterministic templates
+# in core/engine.py and never touch a model.
+SCREEN_RULE_WRITER = """\
+You are the Screen Rule Writer for a QAD screen validation pipeline.
+
+You will receive one validation rule (slug, field, description, custom_logic, message), the child business component name, the resolved child field accessor name, and the fixed method skeleton the statements will live in.
+
+YOUR JOB:
+Write ONLY the statements for the body of the rule method. No method signature, no markdown, no explanation.
+
+HARD RULES:
+- ES5 only: var, plain for loops. No arrow functions, no let/const, no template strings.
+- The method receives eventData, loops the child rows, and returns an array of {message, fieldName} problem objects. Return an empty array when all rows pass.
+- The child rows are found like this. Your body MUST start with these lines exactly:
+
+    var key = null;
+    for (var k in this.NgData) {
+        if (k.length >= SUFFIX.length && k.indexOf(SUFFIX, k.length - SUFFIX.length) !== -1) { key = k; }
+    }
+    var rows = (key !== null) ? (this.NgData[key] || []) : [];
+
+  where SUFFIX is the string literal "_<ChildBcPascal>", built from the child business component name you are given.
+- Read a field on a row as row.<accessor>, using the accessor name you are given.
+- For every row that breaks the rule, push {message: <the rule's message>, fieldName: <the rule's field>} onto the result array.
+- Enforce only the custom_logic you were given. Do not add checks nobody asked for.
 """
 
 

@@ -161,8 +161,35 @@ async def init_db(db_path: Optional[Path] = None) -> None:
                 deployed_at TEXT NOT NULL
             )
         """)
+        # THE HANDLER WRITE RECORD (Case 4).
+        #
+        # This is the rollback record for the screen validation stage: posting
+        # before_ts/before_js back is the undo, and update semantics were
+        # proven live 2026-08-31. Like jef_deploys, it outlives any single run.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS handler_writes (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                view_uri         TEXT NOT NULL,
+                timing           TEXT NOT NULL,
+                run_id           TEXT,
+                -- JSON array of the rule slugs the write carried
+                rules            TEXT NOT NULL,
+                action           TEXT NOT NULL,
+                before_ts        TEXT,
+                before_js        TEXT,
+                after_ts         TEXT NOT NULL,
+                after_js         TEXT NOT NULL,
+                concurrency_hash TEXT,
+                dry_run          INTEGER NOT NULL DEFAULT 1,
+                ok               INTEGER NOT NULL,
+                written_at       TEXT NOT NULL
+            )
+        """)
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_writes_run ON qad_writes(run_id)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_handler_writes_view "
+            "ON handler_writes(view_uri)")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_artifacts_run ON stage_artifacts(run_id)")
         await db.execute(
@@ -474,6 +501,31 @@ async def record_deploy(app_uri: str, classes: List[str], *, ok: bool,
             (app_uri, run_id, json.dumps(sorted(classes)), jar_bytes, jar_sha256,
              1 if dry_run else 0, 1 if ok else 0, status_code,
              json.dumps(response) if response is not None else None, _now()),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def record_handler_write(view_uri: str, timing: str, rules: List[str],
+                               action: str, *, after_ts: str, after_js: str,
+                               ok: bool, dry_run: bool,
+                               before_ts: Optional[str] = None,
+                               before_js: Optional[str] = None,
+                               concurrency_hash: Optional[str] = None,
+                               run_id: Optional[str] = None,
+                               db_path: Optional[Path] = None) -> int:
+    """Record one screen-handler write attempt, successful or not.
+
+    See the handler_writes schema comment: before_ts/before_js are the undo.
+    """
+    async with aiosqlite.connect(db_path or DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO handler_writes (view_uri, timing, run_id, rules, action,"
+            " before_ts, before_js, after_ts, after_js, concurrency_hash,"
+            " dry_run, ok, written_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (view_uri, timing, run_id, json.dumps(sorted(rules)), action,
+             before_ts, before_js, after_ts, after_js, concurrency_hash,
+             1 if dry_run else 0, 1 if ok else 0, _now()),
         )
         await db.commit()
         return int(cur.lastrowid)

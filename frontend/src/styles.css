@@ -750,3 +750,25 @@ details.writes { margin-top: 16px; }
 /* Long lists inside a continuously animated card were janky; contain them so a
    filter keystroke cannot trigger a full-page relayout. */
 .pick-list, .fills { contain: content; }
+
+/* Suggested browses under a Browse URI input. A list, not a select: the user
+   may well type a URI we never guessed, so the input stays the primary control
+   and these only fill it in. */
+.browse-picks { margin: 0 0 10px; }
+.browse-picks .picks-label {
+  display: block; margin-bottom: 4px; color: var(--text-muted);
+  font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+}
+.browse-picks ul.plain li { padding: 0; border-bottom: none; }
+.browse-pick {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 4px 8px; text-align: left; cursor: pointer;
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text); font-size: 13px;
+}
+.browse-pick:hover { background: var(--hover); border-color: rgba(139, 92, 246, 0.35); }
+.browse-pick span { color: var(--text-muted); }
+.browse-pick-uri {
+  margin-left: auto; font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-muted); white-space: nowrap;
+}

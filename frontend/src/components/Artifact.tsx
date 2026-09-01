@@ -29,6 +29,32 @@ function Empty({ children }: { children: ReactNode }) {
   return <p className="muted">{children}</p>;
 }
 
+// Ranked guesses from QAD's own browse list, sent by the backend for one field.
+// Clicking one fills the Browse URI input. They are only guesses ranked by
+// name, so the copy says to check one before using it.
+function BrowsePicks({ list, onPick }: { list: Bag[]; onPick: (uri: string) => void }) {
+  if (!list || list.length === 0) return null;
+  return (
+    <div className="browse-picks">
+      <span className="picks-label">Browses that may fit (click one to use it)</span>
+      <ul className="plain">
+        {list.map((b) => (
+          <li key={b.code}>
+            <button type="button" className="browse-pick" onClick={() => onPick(b.uri)}>
+              <code>{b.code}</code>
+              <span>{b.description}</span>
+              <code className="browse-pick-uri">{b.uri}</code>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="muted">
+        Ranked by name from QAD's browse list, so check one against QAD before you use it.
+      </p>
+    </div>
+  );
+}
+
 // ── Per-kind renderers ───────────────────────────────────────────────────────
 function Text({ a }: { a: Bag }) {
   return <pre className="prose">{a.text ?? a.plan ?? JSON.stringify(a, null, 2)}</pre>;
@@ -121,14 +147,20 @@ function HandlerCode({ a, onBrowseUris }: { a: Bag; onBrowseUris?: (v: Record<st
             fallback AUX always takes. Fill it in and the call works.
           </p>
           {placeholders.map((p) => (
-            <label key={p.field} className="field">
-              <span><code>{p.field}</code> <small>{p.context}</small></span>
-              <input
-                value={uris[p.field] ?? ""}
-                placeholder="urn:browse:bebrowse:com.qad.erp.base.customers"
-                onChange={(e) => setUris({ ...uris, [p.field]: e.target.value })}
+            <div key={p.field}>
+              <label className="field">
+                <span><code>{p.field}</code> <small>{p.context}</small></span>
+                <input
+                  value={uris[p.field] ?? ""}
+                  placeholder="urn:browse:bebrowse:com.qad.erp.base.customers"
+                  onChange={(e) => setUris({ ...uris, [p.field]: e.target.value })}
+                />
+              </label>
+              <BrowsePicks
+                list={p.browse_candidates ?? []}
+                onPick={(uri) => setUris({ ...uris, [p.field]: uri })}
               />
-            </label>
+            </div>
           ))}
           {onBrowseUris && (
             <button className="ghost" onClick={() => onBrowseUris(uris)}>
@@ -233,6 +265,11 @@ function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => vo
                 onChange={(e) => set(f.code, { uri: e.target.value })}
               />
             </label>
+
+            <BrowsePicks
+              list={f.browse_candidates ?? []}
+              onPick={(uri) => set(f.code, { uri })}
+            />
 
             <label className="field">
               <span>Field on that browse (the value returned)</span>
@@ -374,6 +411,18 @@ function EmbeddedRequirements({ a, onParentKey }: {
         </ul>
       </Section>
 
+      {(req.screen_rules ?? []).length > 0 && (
+        <Section title="Validations found">
+          <ul className="plain">
+            {(req.screen_rules ?? []).map((r: Bag, i: number) => (
+              <li key={r?.slug ?? i}>
+                <code>{r?.field}</code>: {r?.message}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       <Section title="Parent component it extends">
         <p className="muted">
           The model proposed <strong>{parent.label ?? parent.key}</strong>. You
@@ -448,6 +497,77 @@ function RelationConfig({ a }: { a: Bag }) {
   );
 }
 
+/** Case 4 — validation rules merged into the parent screen's event handler.
+ *
+ * The gate shows three things apart: the code that was already there (kept
+ * exactly as it is), the marked blocks being added, and the compile verdict.
+ * Everything is optional-chained: an older backend, or a field the model
+ * missed, must degrade to a blank cell rather than a crash. */
+function ScreenRuleGate({ a }: { a: Bag }) {
+  const rules: Bag[] = a?.rules ?? [];
+  const kept: string[] = a?.kept_rules ?? [];
+  const compile: Bag = a?.compile ?? {};
+  const errors: string[] = compile?.errors ?? [];
+  const create = a?.action === "create";
+  const switchesOn = create || a?.was_active === false;
+
+  return (
+    <>
+      <Section title="Handler">
+        <dl className="pairs">
+          <dt>Screen</dt><dd>{a?.view_label} <code>{a?.view_uri}</code></dd>
+          <dt>Action</dt>
+          <dd>{create ? "Create a new handler" : "Update the existing handler"}</dd>
+        </dl>
+        {switchesOn && <p className="muted">The handler will be switched on.</p>}
+      </Section>
+
+      <Section title={`${rules.length} rule${rules.length === 1 ? "" : "s"}`}>
+        <table className="grid">
+          <thead><tr><th>Field</th><th>Check</th><th>Message</th></tr></thead>
+          <tbody>
+            {rules.map((r, i) => (
+              <tr key={r?.slug ?? i}>
+                <td><code>{r?.resolved_field ?? r?.field}</code></td>
+                <td>{r?.check}</td>
+                <td>{r?.message}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {kept.length > 0 && (
+          <p className="muted">Rules kept from before: {kept.join(", ")}</p>
+        )}
+      </Section>
+
+      <Section title="What gets added">
+        <pre className="code">{a?.added_ts_blocks}</pre>
+      </Section>
+
+      <details className="payload">
+        <summary>Your existing code (unchanged)</summary>
+        <pre>{a?.existing_ts}</pre>
+      </details>
+
+      <Section title="Compile check">
+        {compile?.ok
+          ? <p className="ok">The merged handler compiles.</p>
+          : (
+            <ul className="plain">
+              {errors.map((e, i) => <li key={i} className="warn">{e}</li>)}
+            </ul>
+          )}
+        {compile?.checker === "stub-fallback" && (
+          <p className="muted">
+            Checked with simplified types only. Install the QAD compile kit
+            for the full check.
+          </p>
+        )}
+      </Section>
+    </>
+  );
+}
+
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKey,
                           onServersidePick }: {
@@ -473,6 +593,7 @@ export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKe
           parent while Approve approves another. */}
       return <EmbeddedRequirements key={artifact?.parent?.key ?? ""} a={artifact} onParentKey={onParentKey} />;
     case "relation_config": return <RelationConfig a={artifact} />;
+    case "screen_rule":     return <ScreenRuleGate a={artifact} />;
     case "serverside_target":
       // Keyed by the chosen component so regenerating to a different one
       // remounts the picker instead of showing stale selection state.

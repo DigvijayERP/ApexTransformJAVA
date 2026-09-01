@@ -295,13 +295,31 @@ EMBEDDED_STAGES: List[Stage] = [
         label="Deploy",
         description=(
             "Show QAD's deployment warnings and the exact deploy payloads, then "
-            "deploy the child on approval. Terminal. The parent is never "
+            "deploy the child on approval. The parent is never "
             "redeployed. After this, open the parent's screen and refresh: the "
             "extension grid and tab appear there."
         ),
         gated=True,
         writes=["deploy.check_warnings", "deploy.business_entity"],
         artifact_kind="deploy_preview",
+        locks_upstream=True,
+    ),
+    Stage(
+        id="screenrule",
+        number=5,
+        label="Screen validation",
+        description=(
+            "Add the validation rules found at step 1 to the parent screen's "
+            "event handler. Your existing handler code is kept exactly as it is; "
+            "the new rules are added in marked sections, and the whole file is "
+            "compiled before anything is sent. Approving registers the handler "
+            "in QAD and switches it on. Then refresh the QAD screen (Ctrl+F5): "
+            "a screen that is already open keeps running its old handler."
+        ),
+        gated=True,
+        writes=["eventhandler.read", "eventhandler.register"],
+        artifact_kind="screen_rule",
+        conditional_on="screen_rules_found",
         locks_upstream=True,
     ),
 ]
@@ -490,6 +508,15 @@ def applies(stage_id: str, artifacts: Dict[str, Any],
         if not spec:
             return None
         return any(f.get("needsLookup") is True for f in spec.get("fields") or [])
+
+    if stage.conditional_on == "screen_rules_found":
+        req = (artifacts.get("requirements") or {}).get("requirements")
+        if req is None:
+            return None
+        rules = req.get("screen_rules")
+        if rules is None:
+            return None   # older artifact or the model missed it: the stage decides at run time
+        return len(rules) > 0
 
     return None
 

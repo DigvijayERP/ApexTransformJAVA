@@ -28,7 +28,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
 import qad_client
-from core import config, llm, stages, store
+from core import browse_catalog, config, llm, stages, store
 from core.logging_setup import get_logger
 from builders import event_handler_builder as ehb
 from builders import lookup_builder as lkb
@@ -400,7 +400,14 @@ async def stage_handler(ctx: Dict[str, Any], instruction: str = "",
         "plan": plan,
         "typescript": ts_code,
         "typescript_raw": ts_raw,
-        "browse_placeholders": [p.to_dict() for p in placeholders],
+        # Each placeholder carries its own ranked suggestions, so the dialog can
+        # offer a URI instead of asking the user to go and find one. Suggestions
+        # only: the user still types or picks, and nothing is pre-filled.
+        "browse_placeholders": [
+            dict(p.to_dict(), browse_candidates=[
+                b.to_dict() for b in browse_catalog.suggest_for_field(
+                    p.field, naming.to_display_label(p.field))])
+            for p in placeholders],
         "browse_uris_supplied": browse_uris or {},
         "filled": resolved["filled"],
         "skipped": resolved["skipped"],
@@ -512,10 +519,17 @@ async def stage_lookups(ctx: Dict[str, Any], instruction: str = "",
                 "label": naming.to_display_label(f["code"]),
                 "auto_populate_options": lkb.auto_populate_targets(
                     placements, bc, exclude_field=f["code"]),
+                # Suggestions only, ranked from QAD's own browse list. Nothing
+                # is chosen for the user and nothing is filtered out.
+                "browse_candidates": [
+                    b.to_dict() for b in browse_catalog.suggest_for_field(
+                        f["code"], naming.to_display_label(f["code"]))],
             } for f in wanted],
             "hint": ("Point a lookup at a business component we created and the Browse URI, "
                      "Result Field and Search Field are all derived. Pointing at a standard "
-                     "QAD component needs its Browse URI."),
+                     "QAD component needs its Browse URI, and the suggestions listed under "
+                     "each field come from QAD's own browse list. They are guesses ranked by "
+                     "name, so check one before you use it."),
         })
 
     built = []
@@ -915,6 +929,415 @@ async def stage_e_relate(ctx: Dict[str, Any], instruction: str = "") -> StageRes
 # an experimental feature, it is a trap.
 
 
+# ── Case 4: screen validation on the parent's own screen ─────────────────────
+# Deterministic rule bodies for the known checks. The bodies are ES5 and are
+# shared verbatim between the TS method and the JS prototype patch, which is
+# why there are no arrow functions, no let/const and no template strings.
+# Tokens (__SUFFIX__ etc.) are substituted with str.replace, never .format -
+# the code is full of literal braces.
+_RULE_BODY_OPEN = (
+    "var problems = [];\n"
+    "var suffix = __SUFFIX__;\n"
+    "var key = null;\n"
+    "for (var k in this.NgData) {\n"
+    "    if (k.length >= suffix.length && k.indexOf(suffix, k.length - suffix.length) !== -1) { key = k; }\n"
+    "}\n"
+    "var rows = (key !== null) ? (this.NgData[key] || []) : [];\n"
+    "var i;\n"
+    "var value;\n"
+    "for (i = 0; i < rows.length; i++) {\n"
+    "    value = rows[i].__ACCESSOR__;\n")
+
+_RULE_PUSH = "problems.push({ message: __MESSAGE__, fieldName: __FIELD__ });"
+
+_RULE_BODY_CLOSE = "}\nreturn problems;"
+
+SCREEN_RULE_BODIES: Dict[str, str] = {
+    # Empty check. String fields: null, undefined or an all-blank value is a
+    # problem. Non-strings: null or undefined is a problem.
+    "required": (
+        _RULE_BODY_OPEN
+        + '    if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {\n'
+        + "        " + _RULE_PUSH + "\n"
+        + "    }\n"
+        + _RULE_BODY_CLOSE),
+    # Number(value) > 0 required; null, undefined and empty also fail.
+    "positive": (
+        _RULE_BODY_OPEN
+        + '    if (value === null || value === undefined || value === "" || !(Number(value) > 0)) {\n'
+        + "        " + _RULE_PUSH + "\n"
+        + "    }\n"
+        + _RULE_BODY_CLOSE),
+    # Number(value) >= 0 required.
+    "non_negative": (
+        _RULE_BODY_OPEN
+        + "    if (!(Number(value) >= 0)) {\n"
+        + "        " + _RULE_PUSH + "\n"
+        + "    }\n"
+        + _RULE_BODY_CLOSE),
+    # new Date(value) at midnight >= today at midnight required; null fails.
+    "not_in_past": (
+        _RULE_BODY_OPEN
+        + '    if (value === null || value === undefined || value === "") {\n'
+        + "        " + _RULE_PUSH + "\n"
+        + "    } else {\n"
+        + "        var d = new Date(value);\n"
+        + "        d.setHours(0, 0, 0, 0);\n"
+        + "        var today = new Date();\n"
+        + "        today.setHours(0, 0, 0, 0);\n"
+        + "        if (!(d.getTime() >= today.getTime())) {\n"
+        + "            " + _RULE_PUSH + "\n"
+        + "        }\n"
+        + "    }\n"
+        + _RULE_BODY_CLOSE),
+}
+
+
+def _screen_rule_body(check: str, suffix: str, accessor: str,
+                      message: str, field: str) -> str:
+    import json as _json
+    return (SCREEN_RULE_BODIES[check]
+            .replace("__SUFFIX__", _json.dumps(suffix))
+            .replace("__ACCESSOR__", accessor)
+            .replace("__MESSAGE__", _json.dumps(message))
+            .replace("__FIELD__", _json.dumps(field)))
+
+
+def _screen_rule_method_ts(slug: str, body: str) -> str:
+    lines = ["public rule_%s(eventData: any): any {" % slug.replace("-", "_")]
+    for l in body.splitlines():
+        lines.append(("    " + l) if l else "")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _screen_rule_body_of(method_ts: str) -> str:
+    """The statements inside a generated rule method.
+
+    Bodies are ES5 and shared verbatim between TS and JS, so stripping the
+    signature line and the closing brace recovers method_js from a method_ts
+    that extract_rules gave back."""
+    lines = method_ts.splitlines()
+    if len(lines) < 2:
+        return method_ts
+    return "\n".join((l[4:] if l.startswith("    ") else l) for l in lines[1:-1])
+
+
+def _screen_rule_accessor(field_code: str) -> str:
+    # inferred from the wire naming rule and the class 7 example; the live
+    # test confirms it: the child row carries the field code with its first
+    # letter lowercased.
+    return field_code[:1].lower() + field_code[1:] if field_code else field_code
+
+
+def _handler_identity(view_uri: str):
+    """view_namespace + view_pascal from the view URI, app pascal from config."""
+    from builders import screen_rule_builder as srb
+
+    rest = view_uri
+    prefix = "urn:view:viewmeta:"
+    if rest.startswith(prefix):
+        rest = rest[len(prefix):]
+    if "." not in rest:
+        raise StageError(
+            "The parent view name '%s' does not look like a view URI, so the "
+            "handler cannot be addressed." % view_uri)
+    view_namespace, view_pascal = rest.rsplit(".", 1)
+    module = config.app_identity()["module"]
+    app_pascal = "".join(p[:1].upper() + p[1:] for p in module.split(".") if p)
+    return srb.HandlerIdentity(view_pascal=view_pascal,
+                               view_namespace=view_namespace,
+                               app_pascal=app_pascal, timing="BEFORE")
+
+
+def _handler_rows(result: Any) -> List[Dict[str, Any]]:
+    return (((result.data or {}).get("data") or {}).get("eventHandlerV2s")) or []
+
+
+def _marker_blocks_ts(ts_code: str) -> str:
+    """Only the marker blocks of a merged handler, marker lines included.
+
+    What the gate shows as 'what gets added': everything else is untouched."""
+    import re as _re
+    mark = _re.compile(r"// === RULE: [a-z0-9-]+ (START|END) ===")
+    out: List[str] = []
+    inside = False
+    for ln in ts_code.splitlines():
+        m = mark.fullmatch(ln.strip())
+        if m and m.group(1) == "START":
+            inside = True
+        if inside:
+            out.append(ln)
+        if m and m.group(1) == "END":
+            inside = False
+    return "\n".join(out)
+
+
+async def stage_e_screenrule(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+    from agents import prompts
+    from builders import screen_rule_builder as srb
+    import json as _json
+
+    req_art = ctx.get("requirements") or {}
+    req = req_art.get("requirements")
+    if not req:
+        raise StageError("Run and approve the requirements stage first.")
+
+    warnings: List[str] = []
+    rules_in = req.get("screen_rules") or []
+    if not rules_in and not instruction:
+        return StageResult(
+            artifact={},
+            skip=True,
+            skip_reason=("No validation rules were found at step 1, so there "
+                         "is nothing to add."),
+        )
+    if instruction:
+        # Rule identity lives at step 1: one source of truth. A steer here is
+        # passed to the custom-body writer below, never parsed into new rules.
+        warnings.append("To add or change a rule, go back to step 1 and "
+                        "regenerate it with your correction.")
+
+    parent = req_art.get("parent") or {}
+    # The screen name is CONFIG, not run state: read it fresh from the parent
+    # registry, so a name confirmed AFTER step 1 was approved still reaches a
+    # re-run of this stage. Step 1's stored copy cannot be refreshed once live
+    # writes lock it, which is exactly how the first Sales Orders run got stuck
+    # (2026-09-01). The stored copy stays as the fallback.
+    from core import parent_registry as _pr
+    view_uri = ""
+    try:
+        view_uri = str(_pr.get(str(parent.get("key") or "")).view_uri or "")
+    except KeyError:
+        pass
+    view_uri = view_uri or str(parent.get("view_uri") or "")
+    if not view_uri:
+        on_record = ", ".join(
+            p.label for p in _pr.offerable() if getattr(p, "view_uri", ""))
+        return StageResult(
+            artifact={},
+            skip=True,
+            skip_reason=("The parent screen's name in QAD is not on record yet, "
+                         "so the rule cannot be attached. Screens on record so "
+                         "far: " + (on_record or "none") + "."),
+        )
+
+    spec = _need(ctx, "fields", "spec")
+    bc = spec["bc_pascal"]
+
+    # Resolve each rule's field against the approved spec, case-insensitively.
+    # An unresolved field keeps the rule and warns rather than dropping work.
+    codes = {str(f.get("code", "")).lower(): str(f.get("code", ""))
+             for f in spec.get("fields") or []}
+    resolved_rules: List[Dict[str, Any]] = []
+    for r in rules_in:
+        field_name = str(r.get("field") or "")
+        resolved = codes.get(field_name.lower())
+        if not resolved:
+            warnings.append(
+                "The field '%s' named by rule '%s' is not in the approved "
+                "field spec. The rule keeps the name as written; check it "
+                "before approving." % (field_name, r.get("slug")))
+            resolved = field_name
+        row = dict(r)
+        row["resolved_field"] = resolved
+        resolved_rules.append(row)
+
+    identity = _handler_identity(view_uri)
+
+    # Read the handler as it stands. Dry runs stay fully offline, the same
+    # promise every other stage keeps, so a rehearsal assumes the create path.
+    read = await qad_client.call(
+        "eventhandler.read",
+        params={"parent_view_uri": view_uri, "timing": "BEFORE"},
+        dry_run=ctx["dry_run"])
+    rows = _handler_rows(read)
+    existing: Optional[Dict[str, Any]] = None
+    if read.dry_run:
+        action = "create"
+        base_ts = srb.build_scaffold_ts(identity)
+        base_js = ""
+        warnings.append(
+            "Dry run: the handler was not read from QAD, so a new handler is "
+            "assumed. A live run reads the real one first.")
+    elif read.ok and rows:
+        existing = rows[0]
+        base_ts = existing.get("typeScriptCode") or ""
+        base_js = existing.get("javaScriptCode") or ""
+        if srb.classify(base_ts) == "has_own_save_hook":
+            raise StageError(
+                "The screen's handler already has its own save code "
+                "(onBeforeUpdate or onBeforeDelete) outside our marked "
+                "sections. This tool will not change hand-written code. Move "
+                "or remove that code in QAD first, then regenerate this stage.")
+        action = "update"
+    elif read.ok or "does not exist" in (read.error or ""):
+        # No handler on this view yet. QAD compiles TS in its own editor, but
+        # the API path stores what we send, which is why we send both the TS
+        # and the JS patch blocks ourselves.
+        action = "create"
+        base_ts = srb.build_scaffold_ts(identity)
+        base_js = ""
+    else:
+        raise StageError(read.error or
+                         "QAD did not answer the handler read.")
+
+    # Rules already in the handler from an earlier run are re-applied as-is,
+    # never regenerated. A new rule with the same slug replaces its old block.
+    kept = srb.extract_rules(base_ts) if action == "update" else {}
+    new_slugs = {str(r.get("slug") or "") for r in resolved_rules}
+    all_rules: List[Any] = []
+    kept_slugs = sorted(s for s in kept if s not in new_slugs)
+    for slug in kept_slugs:
+        all_rules.append(srb.ScreenRule(
+            slug=slug, method_ts=kept[slug],
+            method_js=_screen_rule_body_of(kept[slug])))
+
+    suffix = "_" + bc
+    for r in resolved_rules:
+        slug = str(r.get("slug") or "")
+        check = str(r.get("check") or "").strip()
+        accessor = _screen_rule_accessor(str(r["resolved_field"]))
+        message = str(r.get("message") or "")
+        if check in SCREEN_RULE_BODIES:
+            body = _screen_rule_body(check, suffix, accessor, message,
+                                     str(r.get("field") or ""))
+        elif check == "custom":
+            skeleton = _screen_rule_method_ts(slug, "// statements go here")
+            user = _json.dumps({
+                "rule": {"slug": slug, "field": r.get("field"),
+                         "description": r.get("description"),
+                         "custom_logic": r.get("custom_logic"),
+                         "message": message},
+                "child_bc": bc,
+                "accessor": accessor,
+                "skeleton": skeleton,
+            })
+            if instruction:
+                user += f"\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
+            body = _strip_fences(await llm.complete(
+                prompts.render(prompts.SCREEN_RULE_WRITER), user,
+                role="generation"))
+        else:
+            raise StageError(
+                "Rule '%s' has an unknown check '%s'. Known checks: required, "
+                "positive, non_negative, not_in_past, custom." % (slug, check))
+        all_rules.append(srb.ScreenRule(
+            slug=slug, method_ts=_screen_rule_method_ts(slug, body),
+            method_js=body))
+
+    merged_ts = srb.apply_rules(base_ts, all_rules, identity)
+    merged_js = srb.apply_rules_js(base_js, all_rules, identity)
+
+    compiled = srb.compile_check(merged_ts)
+    if not compiled.ok:
+        raise StageError("The merged handler does not compile.\n  - "
+                         + "\n  - ".join(compiled.errors))
+
+    all_slugs = sorted(r.slug for r in all_rules)
+    artifact = {
+        "action": action,
+        "view_uri": view_uri,
+        "view_label": parent.get("label") or parent.get("key") or view_uri,
+        "timing": "BEFORE",
+        "was_active": bool(existing.get("isActive")) if existing else None,
+        "activates": True,
+        "rules": [{"slug": r.get("slug"), "field": r.get("field"),
+                   "resolved_field": r.get("resolved_field"),
+                   "check": r.get("check"), "message": r.get("message"),
+                   "description": r.get("description")}
+                  for r in resolved_rules],
+        "kept_rules": kept_slugs,
+        "existing_ts": base_ts,
+        "added_ts_blocks": _marker_blocks_ts(merged_ts),
+        "merged_ts_chars": len(merged_ts),
+        "appended_js_chars": len(merged_js) - len(srb.strip_rules_js(base_js)),
+        "compile": {"ok": True, "errors": [], "checker": compiled.checker},
+        "base_hash": existing.get("concurrencyHash") if existing else None,
+    }
+
+    run_id = ctx["run_id"]
+    db = ctx.get("_db", {})
+
+    async def commit(dry_run: bool) -> List[Any]:
+        # Re-GET before writing: never reuse a stored hash (D11). A rehearsal
+        # sends and reads nothing, so the gate's own read stands in there.
+        reread = await qad_client.call(
+            "eventhandler.read",
+            params={"parent_view_uri": view_uri, "timing": "BEFORE"},
+            dry_run=dry_run)
+        rows2 = _handler_rows(reread)
+        fresh: Optional[Dict[str, Any]] = None
+        if reread.dry_run:
+            fresh = existing
+        elif action == "update":
+            if not reread.ok or not rows2:
+                return [("eventhandler.register", qad_client.QadResult(
+                    ok=False, dry_run=dry_run,
+                    error=("The handler could not be re-read before writing"
+                           + ((": " + reread.error) if reread.error else ".")
+                           + " Nothing was sent.")))]
+            fresh = rows2[0]
+            if (fresh.get("typeScriptCode") or "") != base_ts:
+                return [("eventhandler.register", qad_client.QadResult(
+                    ok=False, dry_run=dry_run,
+                    error=("The handler changed in QAD after this screen was "
+                           "built, so writing now could overwrite someone "
+                           "else's code. Regenerate this stage to pick up the "
+                           "new code. Nothing was sent.")))]
+        else:
+            if reread.ok and rows2:
+                return [("eventhandler.register", qad_client.QadResult(
+                    ok=False, dry_run=dry_run,
+                    error=("A handler now exists on this screen; it was "
+                           "created after this screen was built. Regenerate "
+                           "this stage to merge into it. Nothing was sent.")))]
+            if not reread.ok and "does not exist" not in (reread.error or ""):
+                return [("eventhandler.register", qad_client.QadResult(
+                    ok=False, dry_run=dry_run,
+                    error=("The handler could not be re-read before writing"
+                           + ((": " + reread.error) if reread.error else ".")
+                           + " Nothing was sent.")))]
+
+        # Payload shape: probe_eventhandler.py Phase B, proven live 2026-08-31.
+        # Update echoes uri + concurrencyHash and the identity fields from the
+        # fresh GET; create omits uri and concurrencyHash.
+        row = {
+            "appURI": config.app_uri(),
+            "viewURI": view_uri,
+            "eventHandlerType": "BEFORE",
+            "appliesTo": "WEB",
+            "isActive": True,
+            "typeScriptCode": merged_ts,
+            "javaScriptCode": merged_js,
+            "mappingCode": (fresh or {}).get("mappingCode", "") or "",
+            "disallowedActions": (fresh or {}).get("disallowedActions", "") or "",
+        }
+        if action == "update" and fresh:
+            row["uri"] = fresh["uri"]
+            row["concurrencyHash"] = fresh["concurrencyHash"]
+            row["appURI"] = fresh.get("appURI") or row["appURI"]
+            row["viewURI"] = fresh.get("viewURI") or row["viewURI"]
+            row["eventHandlerType"] = (fresh.get("eventHandlerType")
+                                       or row["eventHandlerType"])
+            row["appliesTo"] = fresh.get("appliesTo") or row["appliesTo"]
+        payload = {"supplementaryMessages": [], "eventHandlerV2s": [row]}
+
+        result = await qad_client.call("eventhandler.register",
+                                       payload=payload, dry_run=dry_run)
+        await store.record_handler_write(
+            view_uri, "BEFORE", all_slugs, action,
+            after_ts=merged_ts, after_js=merged_js,
+            ok=result.ok, dry_run=result.dry_run,
+            before_ts=base_ts if action == "update" else None,
+            before_js=base_js if action == "update" else None,
+            concurrency_hash=row.get("concurrencyHash"),
+            run_id=run_id, **db)
+        return [("eventhandler.register", result)]
+
+    return StageResult(artifact=artifact, commit=commit, warnings=warnings)
+
+
 # ── Case 3: server-side Java extensions ──────────────────────────────────────
 def _workspace():
     """The JEF workspace, or a StageError explaining how to set it."""
@@ -1232,6 +1655,7 @@ RUNNERS = {
         # Deploy is IDENTICAL to Case 1's: same endpoints, same payloads, same
         # warnings gate - the capture confirms the identity values.
         "deploy": stage_deploy,
+        "screenrule": stage_e_screenrule,
     },
 }
 

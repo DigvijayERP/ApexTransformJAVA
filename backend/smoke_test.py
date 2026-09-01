@@ -15,6 +15,7 @@ than by QAD rejecting a deploy.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from core import config, stages
@@ -399,12 +400,20 @@ def main() -> int:
     # separate menu view for an embedded child in either order (destroyed
     # before deploy; duplicate-rejected after; locked in QAD's UI), as the
     # class-3 guide said. A stage that cannot succeed is a trap, not a feature.
-    check("four stages", stages.total("embedded"), 4)
+    check("five stages", stages.total("embedded"), 5)
     check("stage order", [s.id for s in stages.stage_list("embedded")],
-          ["requirements", "fields", "relate", "deploy"])
+          ["requirements", "fields", "relate", "deploy", "screenrule"])
     check("no view stage exists in embedded mode",
           "view" in {s.id for s in stages.stage_list("embedded")}, False)
-    check("deploy is terminal", stages.next_after("deploy", "embedded"), None)
+    # Deploy is no longer always the last stage: the screen validation stage
+    # follows it, and skips itself when step 1 found no rules.
+    check("screen validation follows deploy",
+          stages.next_after("deploy", "embedded").id, "screenrule")
+    check("screen validation is terminal",
+          stages.next_after("screenrule", "embedded"), None)
+    check("screen validation is conditional",
+          stages.get("screenrule", "embedded").conditional_on,
+          "screen_rules_found")
     check("every embedded write exists in the registry",
           sorted({w for s in stages.stage_list("embedded") for w in s.writes} - known), [])
 
@@ -455,6 +464,24 @@ def main() -> int:
           [(d["dataListCode"], [v["dataValue"] for v in d["dataListValues"]])
            for d in em["dataLists"]], [("Rating", ["A", "B"])])
 
+    # QAD rejects an EMPTY DisplayFormat on numeric types (error 393, the
+    # OrderNotes live run, 2026-08-31). The capture carried no integer field,
+    # so the gap is filled with the formats Case 1 has deployed live.
+    i_spec = {
+        "bc_pascal": "CapCheck2", "description": "format check", "parent_key": "Items",
+        "fields": [
+            {"code": "DomainCode", "dataType": "character", "primaryKey": 1, "isRequired": True},
+            {"code": "ItemCode", "dataType": "character", "primaryKey": 2, "isRequired": True},
+            {"code": "SeqNo", "dataType": "integer", "primaryKey": 3, "isRequired": True},
+            {"code": "IsUrgent", "dataType": "logical", "primaryKey": None},
+        ],
+    }
+    i_em = emb.build_embedded_entity_payload(i_spec, ident)["payload"]["entityMetadatas"][0]
+    fmts = {f["entityFieldCode"]: f["displayFormat"] for f in i_em["entityFields"]}
+    check("integer gets a real display format", fmts["SeqNo"], "->,>>>,>>9")
+    check("logical gets a real display format", fmts["IsUrgent"], "mfg-YES/mfg-NO")
+    check("character format stays empty per the capture", fmts["ItemCode"], "")
+
     rel = emb.build_relation_payload(e_spec, pr.get("Items"), ident,
                                      relation_id="11111111-2222-3333-4444-555555555555")
     row = rel["payload"]["BERelations"][0]
@@ -485,6 +512,25 @@ def main() -> int:
     check("WorkOrderMasters carries all three PKs",
           [f["code"] for f in pr.get("WorkOrderMasters").pk_fields],
           ["DomainCode", "WorkOrderNumber", "WorkOrderID"])
+
+    # ── The offline tripwire ────────────────────────────────────────────────
+    # With ADAPTIVE_OFFLINE set, a live POST must raise BEFORE any network or
+    # token work, and a dry run must still pass. Exists because a test harness
+    # once stubbed one endpoint, forgot the rest, and live-deployed a BC.
+    import asyncio as _asyncio
+    import qad_client as _qc
+    os.environ["ADAPTIVE_OFFLINE"] = "1"
+    try:
+        try:
+            _asyncio.run(_qc.call("bc.create", payload={}))
+            check("offline tripwire blocks a live POST", False, True)
+        except RuntimeError as exc:
+            check("offline tripwire blocks a live POST",
+                  "ADAPTIVE_OFFLINE" in str(exc), True)
+        dry = _asyncio.run(_qc.call("bc.create", payload={}, dry_run=True))
+        check("dry run still allowed under the tripwire", dry.dry_run, True)
+    finally:
+        del os.environ["ADAPTIVE_OFFLINE"]
 
     print()
     if FAILURES:

@@ -45,6 +45,10 @@ class Parent:
     offerable: bool
     description: str = ""
     not_offerable_because: str = ""
+    # The parent's maintain-view URI, needed to attach a screen event handler.
+    # Empty until confirmed live for that parent; the screen validation stage
+    # skips itself when it is empty rather than guessing a URI.
+    view_uri: str = ""
 
     @property
     def non_domain_pks(self) -> List[Dict[str, str]]:
@@ -57,6 +61,7 @@ class Parent:
             "pk_fields": self.pk_fields, "offerable": self.offerable,
             "description": self.description,
             "not_offerable_because": self.not_offerable_because,
+            "view_uri": self.view_uri,
         }
 
 
@@ -73,6 +78,7 @@ def _load() -> List[Parent]:
             pk_fields=p["pk_fields"], offerable=bool(p.get("offerable")),
             description=p.get("description", ""),
             not_offerable_because=p.get("not_offerable_because", ""),
+            view_uri=p.get("view_uri", ""),
         ) for p in doc["parents"]]
     return _cache
 
