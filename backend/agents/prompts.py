@@ -164,6 +164,12 @@ needsLookup RULES:
 - Omit the key entirely when false. Do not guess: a wrong true costs the user a
   configuration dialog they did not need.
 
+label RULES:
+- If the input gives a label for a field, copy that text VERBATIM into a "label"
+  key on that field. It is what the user already sees on the existing screen.
+- Do not invent a label for a field the input does not label, and do not tidy up
+  one it does. Omit the key instead: the pipeline derives a label from the code.
+
 HARD RULES:
 - At least one field must have isPrimary: true
 - status must always be "ok"
@@ -178,6 +184,7 @@ OUTPUT:
     "description": "...",
     "fields": [
       { "code": "orderid", "dataType": "character", "isPrimary": true, "isRequired": true, "maxLength": 20 },
+      { "code": "loadAddr", "dataType": "character", "isPrimary": false, "isRequired": false, "maxLength": 8, "label": "Load address" },
       { "code": "customerCode", "dataType": "character", "isPrimary": false, "isRequired": true, "maxLength": 20, "needsLookup": true },
       { "code": "paymentStatus", "dataType": "dropdown", "isPrimary": false, "isRequired": false, "maxLength": 20, "dropdownValues": [{"code":"PENDING","label":"Pending"},{"code":"PAID","label":"Paid"},{"code":"OVERDUE","label":"Overdue"}] },
       { "code": "amount",  "dataType": "decimal",   "isPrimary": false, "isRequired": false }
@@ -694,6 +701,13 @@ DROPDOWN VALUES (MANDATORY for dropdown fields; QAD deploy fails without them):
   - If Requirements did not provide values, infer them from field name and business context
   - code style: SHORT_UPPER_SNAKE for dropdown, integers for dropdown_integer/int64, "true"/"false" for dropdown_logical
 - Non-dropdown fields: do NOT include the `dropdownValues` key
+
+FIELD LABELS:
+- If the input gives a label for a custom_field, copy that text VERBATIM into a
+  `label` key on that field. It is what the user already sees on the screen.
+- Do not invent a label for a field the input does not label. Omit the key and
+  the pipeline derives one from the code. Never add a label to a mirrored parent
+  key or to the child_pk.
 
 OUTPUT: raw JSON only, no markdown, no explanation:
 {

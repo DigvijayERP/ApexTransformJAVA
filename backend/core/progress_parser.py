@@ -62,6 +62,11 @@ CHANGED FROM AUX, AND WHY
      the optional IS keyword is recognised (AUX required IS PRIMARY,
      aux:221); FIND NEXT/PREV no longer records NEXT/PREV as a table name
      (aux:296-299).
+  9. DISPLAY FRAME labels, which neither AUX nor the port read: a new
+     "frame_labels" key carries the LABEL / NO-LABEL written on frame entries.
+     Added 2026-09-01 because the owner's real source labels its fields only in
+     FORM blocks, so every label the user sees on the existing screen was
+     invisible to the parser. See the section near the bottom of this file.
 """
 from __future__ import annotations
 
@@ -203,16 +208,25 @@ def parse_abl(source: str) -> dict[str, Any]:
           ],
           "procedures": [...], "functions": [...],
           "source_tables_referenced": [...],
+          "frame_labels": [               # display-frame labels, source order
+            {"abl_name": str,             # source case preserved
+             "label":    str | None,      # None for NO-LABEL entries
+             "format":   str | None,
+             "code_hint": str},           # heuristic, see _code_hint
+          ],
           "warnings": [...],
         }
 
     Never raises on malformed ABL; problems become entries in "warnings".
+    "frame_labels" is filled even when "tables" is empty: a screen program can
+    label every field it shows without defining a single temp-table.
     """
     text = source or ""
     stripped = _strip_comments(text)
     warnings: list[str] = []
 
     tables = _extract_temp_tables(stripped, warnings)
+    frame_labels = _extract_frame_labels(stripped, warnings)
     procedures = _extract_procedures(stripped)
     functions = _extract_functions(stripped)
     referenced = _extract_referenced_tables(stripped)
@@ -236,6 +250,7 @@ def parse_abl(source: str) -> dict[str, Any]:
         "procedures":               sorted(set(procedures)),
         "functions":                sorted(set(functions)),
         "source_tables_referenced": sorted(set(referenced)),
+        "frame_labels":             frame_labels,
         "warnings":                 warnings,
     }
 
@@ -580,6 +595,234 @@ def _extract_referenced_tables(src: str) -> list[str]:
         if name:
             out.append(name)
     return out
+
+
+# -- DISPLAY FRAME label extraction ----------------------------------------
+# Added 2026-09-01 for the owner's gpekpohu.p/.i pair. Neither file contains a
+# single DEFINE TEMP-TABLE, so everything above this line found nothing, and the
+# generated component ended up with mechanical labels ("Veh Ref1", "Load Addr")
+# while the source says "Vehicle 1" and "Load address" - in a FORM, which nothing
+# here used to read. Frames give LABELS and FORMATS only; the field list still
+# comes from the temp-tables (or from the user's prose) exactly as before.
+
+# Statements whose body is a display list. FORM and DEFINE FRAME carry the
+# labels; DISPLAY / UPDATE / PROMPT-FOR are the "bare display lists" and are
+# read too, because a label may be written inline there instead.
+_FRAME_REGION_RE = re.compile(
+    r"\bFORM\b"
+    r"|\bDEFINE\s+" + _DEF_MODS + r"FRAME\b"
+    r"|\bDISPLAY\b|\bUPDATE\b|\bPROMPT-FOR\b",
+    re.IGNORECASE,
+)
+
+# A frame body is one ABL statement, so it ends at the first period that is
+# followed by whitespace or end-of-source. Periods inside quoted strings
+# (FORMAT ">,>>>,>>9.9<<<<<<<<") and inside dotted names (ttEkDc_mstr.ttEkDc_qty)
+# are not statement ends. 8000 chars is a guard against a source with no
+# terminator at all; real frame bodies are a few hundred.
+_REGION_CAP = 8000
+
+# Quoted string, either quote style, with the optional ABL `:U` untranslatable
+# suffix already handled by the callers ("x(15)":U).
+_QSTR = r"""(?:"[^"]*"|'[^']*')"""
+
+# VIEW-AS names the widget that draws the field (`ttX view-as fill-in label "B"`).
+# It has to be consumed as part of the entry: without it the widget name is the
+# identifier nearest the LABEL, so the widget wins the match, a fake field
+# called `fill-in` enters frame_labels and the real field loses its label.
+# BEST-EFFORT LIST, same as _FRAME_NON_FIELDS: the widgets and widget options a
+# QAD screen normally uses, not the whole ABL widget grammar.
+_VIEW_AS_WIDGET = (r"(?:FILL-IN|TOGGLE-BOX|COMBO-BOX|RADIO-SET|EDITOR|"
+                   r"SELECTION-LIST|SLIDER|TEXT|BUTTON)")
+# A list item is a quoted string or a number; requiring a comma between items
+# stops the run from swallowing the LABEL that follows the widget.
+_VA_ITEM = r"(?:" + _QSTR + r"(?::[A-Za-z]+)?|-?[\d.]+)"
+_VIEW_AS_OPTS = (
+    r"(?:\s+(?:"
+    r"DROP-DOWN-LIST|DROP-DOWN|SIMPLE|SORT|AUTO-COMPLETION|LARGE|"
+    r"SCROLLBAR-VERTICAL|SCROLLBAR-HORIZONTAL|NO-BOX|HORIZONTAL|VERTICAL|"
+    r"(?:LIST-ITEMS|LIST-ITEM-PAIRS|RADIO-BUTTONS)\s+"
+    + _VA_ITEM + r"(?:\s*,\s*" + _VA_ITEM + r")*|"
+    r"INNER-LINES\s+[\d.]+|INNER-CHARS\s+[\d.]+|"
+    r"SIZE(?:-CHARS|-PIXELS)?\s+[\d.]+\s+BY\s+[\d.]+"
+    r"))*"
+)
+
+# Attributes that may sit between the field name and its LABEL / NO-LABEL, or
+# after it. Only the ones that matter here are matched; anything else ends the
+# entry and the next name starts a new one.
+_FRAME_ATTR = (r"(?:\s+(?:COLON\s+[\d.]+|FORMAT\s+" + _QSTR + r"(?::[A-Za-z]+)?"
+               r"|VIEW-AS\s+" + _VIEW_AS_WIDGET + _VIEW_AS_OPTS + r"))*")
+
+_FRAME_ENTRY_RE = re.compile(
+    # 1 name, optionally table-qualified (ttEkDc_mstr.ttEkDc_unload_addr). The
+    # lookbehind stops a match starting in the middle of a longer identifier or
+    # on the field half of a qualified name.
+    r"(?<![\w\-.])(" + _IDENT + r"(?:\.\w[\w-]*)?)"
+    r"(" + _FRAME_ATTR + r")"                       # 2 attributes before the label
+    r"\s+(?:(NO-LABEL)"                             # 3 deliberately unlabelled
+    r"|(?<![\w-])LABEL\s+(?:\"([^\"]*)\"|'([^']*)')(?::[A-Za-z]+)?)"   # 4/5 label text
+    r"(" + _FRAME_ATTR + r")",                      # 6 attributes after the label
+    re.IGNORECASE,
+)
+
+# Words that can stand where a field name stands in a display list. Requiring a
+# LABEL / NO-LABEL right after the name already rules almost all of them out;
+# this is belt and braces. BEST-EFFORT LIST: built from what the owner's two
+# files actually contain plus the obvious siblings, not from the ABL grammar.
+_FRAME_NON_FIELDS = {
+    "FORM", "FRAME", "DEFINE", "DISPLAY", "UPDATE", "PROMPT-FOR", "SET",
+    "WITH", "AT", "TO", "SKIP", "SPACE", "TITLE", "COLOR", "NORMAL", "COLON",
+    "FORMAT", "LABEL", "NO-LABEL", "SIDE-LABELS", "NO-LABELS", "WIDTH",
+    "NO-BOX", "BOX", "DOWN", "STREAM-IO", "CENTERED", "OVERLAY", "ROW",
+    "COLUMN", "COLUMNS", "1-COLUMN", "2-COLUMN", "THREE-D", "SIZE",
+    "SIZE-CHARS", "ATTR-SPACE", "NO-ATTR-SPACE", "NO-UNDERLINE", "NO-PAUSE",
+    "NO-VALIDATE", "NO-ERROR", "NO-LOCK", "EXCLUSIVE-LOCK", "SHARE-LOCK",
+    "GO-ON", "EDITING", "VIEW-AS", "HELP", "VALIDATE", "BLANK", "AUTO-RETURN",
+    "RETAIN", "SCROLL", "WHEN", "EXCEPT", "USING", "LIKE", "AS", "OF", "IN",
+    "END", "DO", "IF", "THEN", "ELSE", "FOR", "EACH", "FIRST", "WHERE", "AND",
+    # VIEW-AS widgets and their options. _FRAME_ATTR normally swallows these as
+    # part of the field's own entry; they are listed here too so that a widget
+    # clause this best-effort list does not cover cannot leave a widget name
+    # standing where a field name belongs.
+    "FILL-IN", "TOGGLE-BOX", "COMBO-BOX", "RADIO-SET", "EDITOR",
+    "SELECTION-LIST", "SLIDER", "BUTTON", "TEXT", "RECTANGLE", "IMAGE",
+    "LIST-ITEMS", "LIST-ITEM-PAIRS", "RADIO-BUTTONS", "INNER-LINES",
+    "INNER-CHARS", "DROP-DOWN-LIST", "DROP-DOWN", "SIMPLE", "SORT",
+    "AUTO-COMPLETION", "SCROLLBAR-VERTICAL", "SCROLLBAR-HORIZONTAL",
+    "HORIZONTAL", "VERTICAL", "LARGE", "SIZE-PIXELS", "TOOLTIP",
+}
+
+
+def _statement_end(src: str, start: int) -> int:
+    """Index just past the period that ends the statement beginning at `start`.
+
+    Quoted strings are skipped whole, and a period only counts when whitespace
+    or end-of-source follows it, so dotted names survive."""
+    limit = min(len(src), start + _REGION_CAP)
+    i = start
+    while i < limit:
+        ch = src[i]
+        if ch in "\"'":
+            close = src.find(ch, i + 1)
+            if close == -1:
+                return limit
+            i = close + 1
+            continue
+        if ch == "." and (i + 1 >= len(src) or src[i + 1].isspace()):
+            return i + 1
+        i += 1
+    return limit
+
+
+def _extract_frame_labels(src: str, warnings: list[str]) -> list[dict[str, Any]]:
+    """Field labels written on display-frame entries, in source order.
+
+    First label for an ABL name wins. NO-LABEL is recorded with label None: the
+    source says that field is deliberately unlabelled, and inventing one here
+    would be worse than leaving it to the caller's default.
+
+    The same first-wins-plus-warning rule is applied a second time on code_hint,
+    because _code_hint is many-to-one and the prompt block downstream keys its
+    rows on code_hint, not on the ABL name.
+    """
+    out: list[dict[str, Any]] = []
+    seen: dict[str, dict[str, Any]] = {}
+    by_hint: dict[str, dict[str, Any]] = {}
+    pos = 0
+    while True:
+        region = _FRAME_REGION_RE.search(src, pos)
+        if not region:
+            break
+        end = _statement_end(src, region.end())
+        # Nested starts (an UPDATE inside a DISPLAY block) are already covered
+        # by the region they sit in, so the cursor jumps past the whole thing.
+        pos = max(end, region.end())
+        for m in _FRAME_ENTRY_RE.finditer(src[region.end():end]):
+            name = m.group(1)
+            if name.split(".")[-1].upper() in _FRAME_NON_FIELDS \
+                    or name.upper() in _FRAME_NON_FIELDS:
+                continue
+            abl_name = name.split(".")[-1]
+            label = None if m.group(3) else (m.group(4) or m.group(5) or "").strip()
+            fmt_m = _FORMAT_RE.search((m.group(2) or "") + " " + (m.group(6) or ""))
+            entry = {
+                "abl_name": abl_name,
+                "label":    label or None,
+                "format":   _first_group(fmt_m) if fmt_m else None,
+                "code_hint": _code_hint(abl_name),
+            }
+            prior = seen.get(abl_name.upper())
+            if prior is not None:
+                # A real ambiguity the user should see: the same field is
+                # labelled two ways on two screens. First wins, but say so.
+                if entry["label"] and entry["label"] != prior["label"]:
+                    warnings.append(
+                        f"field {abl_name} is labelled \"{prior['label']}\" in one frame "
+                        f"and \"{entry['label']}\" in another. The first label was kept."
+                    )
+                continue
+            seen[abl_name.upper()] = entry
+            out.append(entry)
+
+            # Two DIFFERENT ABL names can normalise to one field code:
+            # gpekpohu.p carries both ttEkDc_load_addr and cLoadAddr, and both
+            # come out as loadAddr. The prompt block is keyed on code_hint, so
+            # two labels under one code would hand the model a coin flip on the
+            # label this whole path exists to get right. Same rule as above.
+            # Unlabelled entries are not registered: there is nothing to clash.
+            if not entry["label"]:
+                continue
+            hint_prior = by_hint.get(entry["code_hint"])
+            if hint_prior is None:
+                by_hint[entry["code_hint"]] = entry
+            elif hint_prior["label"] != entry["label"]:
+                warnings.append(
+                    f"fields {hint_prior['abl_name']} and {abl_name} both read as "
+                    f"'{entry['code_hint']}', labelled \"{hint_prior['label']}\" and "
+                    f"\"{entry['label']}\". The first label was kept."
+                )
+    return out
+
+
+# A table-ish prefix: the tt<Something> temp-table style, or the short lowercase
+# token QAD puts in front of every column (po_nbr, ad_addr, ettc_trade_nbr).
+_TT_PREFIX_RE = re.compile(r"^tt[A-Za-z0-9]*$")
+_SHORT_PREFIX_RE = re.compile(r"^[A-Za-z]{2,6}$")
+# Hungarian prefix on an ABL variable: one to three lowercase letters in front
+# of a capital (cCarrierName, dSubmDate, lDangerous, iSequence).
+_HUNGARIAN_RE = re.compile(r"^[a-z]{1,3}(?=[A-Z])")
+
+
+def _code_hint(abl_name: str) -> str:
+    """ABL name -> the field code the rest of the pipeline uses.
+
+    ttEkDc_load_addr -> loadAddr ; cCarrierName -> carrierName ;
+    ttEkDc__qadc01 -> qadc01
+
+    THIS IS A HEURISTIC, not a rule QAD publishes. It strips the table-ish
+    prefix in front of the first underscore, collapses the rest to camelCase and
+    drops leading underscores. It cannot tell a table prefix from a short first
+    word, so an unprefixed name like `load_addr` loses its first segment. Every
+    name in the sources this was built for carries a prefix; treat the output as
+    a hint for matching, never as an authority on the field code.
+    """
+    name = (abl_name or "").strip()
+    if not name:
+        return ""
+    if "_" in name.strip("_"):
+        head, _, rest = name.lstrip("_").partition("_")
+        if rest and (_TT_PREFIX_RE.match(head) or _SHORT_PREFIX_RE.match(head)):
+            name = rest
+    name = name.lstrip("_")
+    if "_" in name:
+        parts = [p for p in name.split("_") if p]
+        if not parts:
+            return ""
+        return parts[0][:1].lower() + parts[0][1:] + "".join(
+            p[:1].upper() + p[1:] for p in parts[1:])
+    name = _HUNGARIAN_RE.sub("", name)
+    return name[:1].lower() + name[1:]
 
 
 # -- Helpers ---------------------------------------------------------------

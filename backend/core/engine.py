@@ -117,18 +117,229 @@ def _abl_grounding(text: str) -> Optional[Dict[str, Any]]:
     if not text or not pp.looks_like_abl(text):
         return None
     parsed = pp.parse_abl(text)
-    return parsed if parsed.get("tables") else None
+    # Labels alone are worth grounding on. The owner's gpekpohu.p (2026-09-01)
+    # defines no temp-table at all, so the old tables-only test threw away a
+    # parse that held all 22 of the labels the user sees on the existing screen.
+    return parsed if (parsed.get("tables") or parsed.get("frame_labels")) else None
+
+
+# At most this many label rows go into a prompt. A frame-heavy program can
+# carry hundreds and the field list is not built from them, so the block is a
+# reference, never a dump of the file.
+_MAX_LABEL_ROWS = 40
+
+
+def _frame_label_block(parsed: Optional[Dict[str, Any]]) -> str:
+    """The labels the source writes on its display frames, as prompt text.
+
+    NO-LABEL entries are left out of the rows on purpose: the source says that
+    field is deliberately unlabelled, so there is nothing to copy.
+    """
+    labelled = [f for f in (parsed or {}).get("frame_labels") or [] if f.get("label")]
+    # code_hint is many-to-one (gpekpohu.p has ttEkDc_load_addr and cLoadAddr,
+    # both loadAddr), and these rows are keyed on it. Two rows for one code
+    # under a heading that says "verbatim" is a coin flip, so the first label
+    # wins here exactly as it does in the parser, which also warns about it.
+    rows: List[Dict[str, Any]] = []
+    taken: set = set()
+    for f in labelled:
+        if f["code_hint"] in taken:
+            continue
+        taken.add(f["code_hint"])
+        rows.append(f)
+    if not rows:
+        return ""
+    shown = rows[:_MAX_LABEL_ROWS]
+    width = max(len(f["code_hint"]) for f in shown)
+    lines = [f'  {f["code_hint"]:<{width}} -> "{f["label"]}"' for f in shown]
+    if len(rows) > len(shown):
+        lines.append(f"  ... and {len(rows) - len(shown)} more labels not listed here.")
+    return (
+        "FIELD LABELS FOUND IN THE SOURCE (use these as the field labels "
+        "verbatim;\nthey are what the user sees on the existing screen):\n"
+        + "\n".join(lines)
+        + "\nFields marked no-label in the source have no label; leave them to "
+          "the default."
+    )
+
+
+def _mark_source_labels(spec: Optional[Dict[str, Any]],
+                        parsed: Optional[Dict[str, Any]]) -> None:
+    """Flag the spec fields whose label really is the one the source wrote.
+
+    The gate tells the user a label was "taken from the source you pasted". A
+    field simply HAVING a label does not prove that: every embedded spec field
+    carries one, built from the parent's field code by _mirror_parent_pks, with
+    no source pasted at all. So the claim is checked instead of assumed: the
+    flag goes on only when the source frame labelled this same code with this
+    same text. Set in place, on the spec the gate renders and nothing else
+    reads, so no builder or payload changes.
+    """
+    if not isinstance(spec, dict):
+        return
+    fields = spec.get("fields") or []
+    by_code = {}
+    for f in (parsed or {}).get("frame_labels") or []:
+        if f.get("label") and f.get("code_hint"):
+            by_code.setdefault(str(f["code_hint"]).lower(), str(f["label"]).strip())
+    for f in fields:
+        if not isinstance(f, dict):
+            continue
+        f.pop("labelFromSource", None)
+        label = f.get("label")
+        if not isinstance(label, str) or not label.strip():
+            continue
+        code = str(f.get("code") or "").lower()
+        if by_code.get(code) == label.strip():
+            f["labelFromSource"] = True
 
 
 def _abl_prompt_block(parsed: Optional[Dict[str, Any]]) -> str:
     import json as _json
     if not parsed:
         return ""
-    return (
-        "PARSED ABL SCHEMA (deterministic, extracted from the source the user "
-        "pasted - treat as the authoritative field list):\n"
-        + _json.dumps(parsed["tables"], indent=1)
-    )
+    blocks: List[str] = []
+    if parsed.get("tables"):
+        blocks.append(
+            "PARSED ABL SCHEMA (deterministic, extracted from the source the user "
+            "pasted - treat as the authoritative field list):\n"
+            + _json.dumps(parsed["tables"], indent=1)
+        )
+    label_block = _frame_label_block(parsed)
+    if label_block:
+        blocks.append(label_block)
+    return "\n\n".join(blocks)
+
+
+# ── Is this BC name already taken? ───────────────────────────────────────────
+# Why any of this exists: on run 4ee95cd779aa (2026-09-01) the user asked for a
+# "Delivery Request" component. 'DeliveryReq' was already in QAD from an earlier
+# run, so bc.create was rejected five times in a row with "Entity metadata
+# already exists (EntityURI)". Nothing checked the name BEFORE the write, so the
+# only recovery was a free-text steer - and the fifth steer made the model read
+# the parenthetical as the new name and build a component literally called
+# EntityURI. The check below runs at the gate instead, and the rename it offers
+# is deterministic. (stages.py still declares a 'fields.autofix' stage with no
+# runner; it stays unimplemented on purpose - this replaces the idea.)
+async def _name_taken(name: str, identity) -> Optional[bool]:
+    """True taken, False free, None could-not-tell.
+
+    `bc.metadata.read` on the entity urn answers this reliably on this
+    environment (proven live 2026-09-01): an existing component comes back with
+    one entityMetadatas row, a free name comes back with none. It is a GET, so
+    it is safe on a rehearsal too.
+
+    NEVER raises. A check that cannot run must not block a stage, and None is
+    not the same answer as False.
+    """
+    if not name:
+        return None
+    try:
+        res = await qad_client.call("bc.metadata.read",
+                                    params={"entity_uri": identity.entity_uri(name)})
+    except Exception as exc:  # missing credentials, bad config, anything
+        logger.info("[NAME] could not check '%s': %s", name, exc)
+        return None
+    # Only an answer QAD really gave counts. A 500, a 401, a 403 and an HTML
+    # 504 all carry no entityMetadatas, so reading their bodies would report
+    # every name as FREE and _first_free_name would then hand back a name QAD
+    # already has. `ok` on its own cannot be the test either: a FREE name comes
+    # back HTTP 200 with an empty list, which is ok=False.
+    status = getattr(res, "status_code", None)
+    data = res.data if isinstance(res.data, dict) else None
+    if status is None or status >= 400 or data is None:
+        logger.info("[NAME] could not check '%s': %s", name, getattr(res, "error", ""))
+        return None
+    body = data.get("data") if isinstance(data.get("data"), dict) else data
+    return bool((body or {}).get("entityMetadatas"))
+
+
+async def _first_free_name(base: str, identity, limit: int = 20) -> Optional[str]:
+    """The first name in the ladder that QAD does not already have.
+
+    None when the check could not run or every candidate is taken. Stops at the
+    first "could not tell" rather than walking on: a suggestion built on an
+    unanswered check is worse than no suggestion at all.
+    """
+    for candidate in naming.name_candidates(base, limit):
+        taken = await _name_taken(candidate, identity)
+        if taken is None:
+            return None
+        if taken is False:
+            return candidate
+    return None
+
+
+async def _name_clash_note(bc: str, identity) -> Tuple[Dict[str, Any], List[str]]:
+    """Extra artifact keys and warnings when the BC name is already in QAD.
+
+    Returns ({}, []) when the name is free AND when the check could not run: a
+    check that did not run must be silent, not a false all-clear.
+    """
+    if await _name_taken(bc, identity) is not True:
+        return {}, []
+    suggestion = await _first_free_name(bc, identity)
+    if suggestion:
+        note = (f"A business component named '{bc}' already exists in QAD. Approving "
+                f"this stage will be rejected. Use the suggested name '{suggestion}', "
+                f"or change the name yourself.")
+    else:
+        note = (f"A business component named '{bc}' already exists in QAD. Approving "
+                f"this stage will be rejected. Give it a different name.")
+    return {"name_taken": True, "suggested_name": suggestion}, [note]
+
+
+def _renamed_bc(asked: str) -> Tuple[str, List[str]]:
+    """Sanitise a name chosen at the gate, and say so when it had to change."""
+    asked = (asked or "").strip()
+    clean = naming.sanitize_bc_name(asked)
+    if not clean:
+        raise StageError(
+            f"'{asked}' cannot be a component name. QAD builds a table name and a "
+            f"urn from it, so it needs letters or digits and must start with a letter.")
+    if clean == asked:
+        return clean, []
+    return clean, [
+        f"The name '{asked}' was changed to '{clean}'. A component name is "
+        f"PascalCase, letters and digits only, and at most {naming.MAX_BC_NAME} "
+        f"characters."]
+
+
+async def _prev_spec(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The last stored field spec, skipping attempts that only hold an error.
+
+    `context()` carries the LATEST attempt, and a stage that raised is saved as
+    a new latest attempt holding just {"error": ...}. So one failed regenerate
+    in between used to wipe the spec, and the gate's "Use <name>" button then
+    fell through to the model and re-rolled the whole field list under a user
+    who had asked for a rename. Walk back to the last attempt that really has
+    a spec instead.
+    """
+    art = ctx.get("fields")
+    if isinstance(art, dict) and art.get("spec"):
+        return art["spec"]
+    db = ctx.get("_db") or {}
+    for row in reversed(await store.stage_history(ctx["run_id"], "fields", **db)):
+        old = row.get("artifact")
+        if isinstance(old, dict) and old.get("spec"):
+            return old["spec"]
+    return None
+
+
+async def _create_failure_message(res: Any, bc: str) -> str:
+    """What a rejected bc.create should say to a human and to a model.
+
+    QAD's own text does not name the component, and the fieldName it carries is
+    a metadata slot rather than a name to reuse. Reading it as one is exactly
+    how a component called 'EntityURI' was built on 2026-09-01.
+    """
+    if not bc or not qad_client.is_duplicate_entity_error(res):
+        return res.error
+    suggestion = await _first_free_name(bc, AppIdentity.from_config())
+    example = (f" Use a different name, for example '{suggestion}'."
+               if suggestion else " Use a different name.")
+    return (f"QAD already has a business component named '{bc}'. Nothing was "
+            f"created.{example}")
 
 
 # ── Stage 1: requirements ────────────────────────────────────────────────────
@@ -172,7 +383,8 @@ def _handler_hint(requirements_text: str) -> Optional[bool]:
 
 
 # ── Stage 2: fields ──────────────────────────────────────────────────────────
-async def stage_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+async def stage_fields(ctx: Dict[str, Any], instruction: str = "",
+                       bc_name: Optional[str] = None) -> StageResult:
     from agents import prompts
 
     requirements = _need(ctx, "requirements", "text")
@@ -180,13 +392,43 @@ async def stage_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResul
     if instruction:
         user = f"{requirements}\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
 
-    parsed = llm.parse_json(
-        await llm.complete(prompts.render(prompts.FIELD_CREATOR), user,
-                          role="generation", json_mode=True)
-    )
-    spec = parsed.get("spec") if isinstance(parsed, dict) else None
-    if not spec:
-        raise StageError("The model did not return a `spec` object.")
+    # The summary above is prose a model wrote, and it is not asked to carry
+    # field labels through, so a label read from the source would be lost before
+    # it ever reached this stage. The labels are deterministic, so they are
+    # handed over directly. Nothing else from the ABL parse is repeated here:
+    # the field list still comes from the summary, exactly as before.
+    abl = _abl_grounding(ctx.get("user_input") or "")
+    labels = _frame_label_block(abl)
+    if labels:
+        user = f"{labels}\n\n{user}"
+
+    name_warnings: List[str] = []
+    if bc_name:
+        # A name chosen at the gate is a deterministic swap, not a reason to
+        # re-roll the field list through the model. Same shape as the embedded
+        # requirements gate's parent_key override: the user asked for a rename,
+        # so a rename is all they get. No spec to rename is an error, never a
+        # quiet model call - the gate promises the fields stay as they are.
+        prev_spec = await _prev_spec(ctx)
+        if not prev_spec:
+            raise StageError(
+                "There is no saved field design to rename. Run the fields stage "
+                "again, then choose the name at the gate.")
+        spec = dict(prev_spec)
+    else:
+        parsed = llm.parse_json(
+            await llm.complete(prompts.render(prompts.FIELD_CREATOR), user,
+                              role="generation", json_mode=True)
+        )
+        spec = parsed.get("spec") if isinstance(parsed, dict) else None
+        if not spec:
+            raise StageError("The model did not return a `spec` object.")
+
+    if bc_name:
+        spec["bc_pascal"], name_warnings = _renamed_bc(bc_name)
+
+    # Only now can the gate honestly say which labels came from the paste.
+    _mark_source_labels(spec, abl)
 
     problems = naming.validate_spec(spec)
     if problems:
@@ -235,6 +477,11 @@ async def stage_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResul
                 results.append(("bc.metadata.write", wired))
         return results
 
+    # Before anything is written, ask QAD whether the name is free. A read, so
+    # it runs on rehearsals too: a dry run that hides a name clash is rehearsing
+    # the wrong thing.
+    clash, clash_warnings = await _name_clash_note(spec["bc_pascal"], ident)
+
     return StageResult(
         artifact={
             "spec": spec,
@@ -244,12 +491,13 @@ async def stage_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResul
             "entity_uri": built["entity_uri"],
             "payload_preview": built["payload"],
             "summary": built["summary"],
+            **clash,
         },
         commit=commit,
         warnings=[
             f"'{r['asked_for']}' is a SQL reserved word - the QAD column will be "
             f"'{r['actual_column']}'." for r in renames
-        ],
+        ] + name_warnings + clash_warnings,
     )
 
 
@@ -778,7 +1026,8 @@ def _mirror_parent_pks(spec_fields: List[Dict[str, Any]], pk_fields: List[Dict[s
     return fields, warns
 
 
-async def stage_e_fields(ctx: Dict[str, Any], instruction: str = "") -> StageResult:
+async def stage_e_fields(ctx: Dict[str, Any], instruction: str = "",
+                         bc_name: Optional[str] = None) -> StageResult:
     from agents import prompts
     from core import parent_registry as pr
     import json as _json
@@ -815,35 +1064,56 @@ async def stage_e_fields(ctx: Dict[str, Any], instruction: str = "") -> StageRes
             f"Could not verify '{parent.key}' live ({live.get('error', 'no detail')}); "
             f"building from the registry entry.")
 
-    model_input = dict(req)
-    model_input["parent_pk_fields"] = pk_fields
-    user = _json.dumps(model_input)
-    if instruction:
-        user += f"\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
+    if bc_name:
+        # Deterministic rename from the gate: reuse the spec exactly as it was
+        # shown and swap only the name. Re-rolling the model here would change
+        # the field list under a user who asked for one thing, so a missing
+        # spec is an error rather than a silent model call.
+        prev_spec = await _prev_spec(ctx)
+        if not prev_spec:
+            raise StageError(
+                "There is no saved field design to rename. Run the fields stage "
+                "again, then choose the name at the gate.")
+        spec = dict(prev_spec)
+        spec["bc_pascal"], rename_warns = _renamed_bc(bc_name)
+        warnings.extend(rename_warns)
+        bc = spec["bc_pascal"]
+        pk_fields = spec.get("parent_pk_fields") or pk_fields
+    else:
+        model_input = dict(req)
+        model_input["parent_pk_fields"] = pk_fields
+        user = _json.dumps(model_input)
+        if instruction:
+            user += f"\n\nCORRECTION FROM THE USER, apply this:\n{instruction}"
 
-    parsed = llm.parse_json(await llm.complete(
-        prompts.render(prompts.EMBEDDED_FIELD_CREATOR,
-                       docs_context=_docs_bundle("business_component")),
-        user, role="generation", json_mode=True))
-    spec_in = (parsed.get("spec") if isinstance(parsed, dict) else None) or {}
-    bc = spec_in.get("bc_pascal") or req.get("bc_pascal")
-    if not bc:
-        raise StageError("The model did not return a BC name.")
+        parsed = llm.parse_json(await llm.complete(
+            prompts.render(prompts.EMBEDDED_FIELD_CREATOR,
+                           docs_context=_docs_bundle("business_component")),
+            user, role="generation", json_mode=True))
+        spec_in = (parsed.get("spec") if isinstance(parsed, dict) else None) or {}
+        bc = spec_in.get("bc_pascal") or req.get("bc_pascal")
+        if not bc:
+            raise StageError("The model did not return a BC name.")
 
-    mirrored, mirror_warns = _mirror_parent_pks(spec_in.get("fields") or [], pk_fields,
-                                                req.get("child_pk") or {}, bc)
-    warnings.extend(mirror_warns)
-    spec = {
-        "bc_pascal": bc,
-        "description": spec_in.get("description") or req.get("description", ""),
-        "parent_key": parent.key,
-        # The PK list the mirrors were actually built from - live when a live
-        # read succeeded, registry otherwise. The relate stage maps THIS list,
-        # never the file entry, so the relation can not disagree with the
-        # entity that was really created.
-        "parent_pk_fields": pk_fields,
-        "fields": mirrored,
-    }
+        mirrored, mirror_warns = _mirror_parent_pks(spec_in.get("fields") or [], pk_fields,
+                                                    req.get("child_pk") or {}, bc)
+        warnings.extend(mirror_warns)
+        spec = {
+            "bc_pascal": bc,
+            "description": spec_in.get("description") or req.get("description", ""),
+            "parent_key": parent.key,
+            # The PK list the mirrors were actually built from - live when a live
+            # read succeeded, registry otherwise. The relate stage maps THIS list,
+            # never the file entry, so the relation can not disagree with the
+            # entity that was really created.
+            "parent_pk_fields": pk_fields,
+            "fields": mirrored,
+        }
+
+    # Same gate, same renderer, same promise. Mirrors carry a label built from
+    # the parent's field code, so without this check every embedded row claimed
+    # to come from a paste that may never have happened.
+    _mark_source_labels(spec, _abl_grounding(ctx.get("user_input") or ""))
 
     ident = AppIdentity.from_config()
     built = build_embedded_entity_payload(spec, ident)
@@ -878,6 +1148,10 @@ async def stage_e_fields(ctx: Dict[str, Any], instruction: str = "") -> StageRes
                                                       params=params, dry_run=True)))
         return results
 
+    # Same pre-write name check as the standard field stage.
+    clash, clash_warnings = await _name_clash_note(bc, ident)
+    warnings.extend(clash_warnings)
+
     n_pks = len(pk_fields)
     return StageResult(
         artifact={
@@ -887,6 +1161,7 @@ async def stage_e_fields(ctx: Dict[str, Any], instruction: str = "") -> StageRes
             "entity_uri": built["entity_uri"],
             "payload_preview": built["payload"],
             "summary": built["summary"],
+            **clash,
             "pk_structure": {
                 "mirrored_parent_pks": [f["code"] for f in spec["fields"][:n_pks]],
                 "child_pk": spec["fields"][n_pks]["code"],
@@ -1797,14 +2072,21 @@ async def approve_stage(run_id: str, stage_id: str, db_path=None,
             await store.record_write(run_id, stage_id, endpoint_id, ok=res.ok,
                                      dry_run=res.dry_run, request=res.request,
                                      response=res.data if not res.dry_run else None, **db)
+            error = res.error
+            # A create rejected because the name is taken gets a plain message
+            # that names the component and a free name to use, rather than
+            # QAD's own text - which names neither.
+            if not res.ok and endpoint_id == "bc.create":
+                error = await _create_failure_message(
+                    res, result.artifact.get("bc_pascal") or run.get("bc_pascal") or "")
             written.append({"endpoint": endpoint_id, "ok": res.ok,
-                            "dry_run": res.dry_run, "error": res.error})
+                            "dry_run": res.dry_run, "error": error})
             if not res.ok:
                 await store.set_stage_status(run_id, stage_id, store.STAGE_FAILED, **db)
                 await store.update_run(run_id, status=store.RUN_FAILED,
-                                       error=res.error, **db)
+                                       error=error, **db)
                 return {"stage": stage_id, "approved": False, "writes": written,
-                        "error": res.error}
+                        "error": error}
 
     await store.set_stage_status(run_id, stage_id, store.STAGE_APPROVED, **db)
     nxt = stages.next_after(stage_id, mode)

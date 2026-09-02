@@ -116,20 +116,17 @@ class BrowseTarget:
                 f"Browse URI '{self.uri}' does not look like a browse urn. Expected the form "
                 f"'urn:browse:bebrowse:<module.path>.<browseName>' or 'urn:browse:mfg:<code>'."
             )
+        # NO "must contain a dot" rule here. It was inferred from the guide's one
+        # worked example (training.className) and is FALSE: read live 2026-09-01,
+        # QAD returns 'digSmokeTest.testCode' for one of our own browses and
+        # 'debtor.DebtorCode' for cm001, but a bare 'pt_part' for pp125 and
+        # 'changeStatus' for cm007. The shape is the browse's business, not ours.
+        # The engine resolves whatever the user typed against QAD's own field
+        # list for that browse, so what arrives here is already QAD's spelling.
         if not self.result_field.strip():
             out.append("Result Field is required - the column the lookup returns.")
-        elif "." not in self.result_field:
-            out.append(
-                f"Result Field '{self.result_field}' must be a dotted browse path such as "
-                f"'training.className', not a bare column name."
-            )
         if not self.search_field.strip():
             out.append("Search Field is required - the column the lookup searches.")
-        elif "." not in self.search_field:
-            out.append(
-                f"Search Field '{self.search_field}' must be a dotted browse path such as "
-                f"'training.className', not a bare column name."
-            )
         return out
 
 
@@ -198,9 +195,10 @@ def build_lookup_payload(
     # nonetheless goes over the wire, so it is reproduced rather than tidied away.
     conditions = []
     for cond in lookup.search_conditions:
+        # Verbatim, no entity prefix: a bare column can be exactly what QAD
+        # calls the field (pp125 offers 'pt_part'), so completing it would
+        # invent a name QAD does not have. Same reason as the note in validate().
         name = str(cond.get("field_name", ""))
-        if "." not in name and lookup.browse.entity:
-            name = f"{lookup.browse.entity}.{name}"
         conditions.append({
             "fieldName": name,
             "operator": str(cond.get("operator", "CONTAINS")).upper(),

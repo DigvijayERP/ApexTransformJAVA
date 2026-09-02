@@ -1420,6 +1420,182 @@ so the UI can show it, and nothing filters on it. And table matching only adds s
 browse that already matched on description or term, deliberately: a table name alone
 pulling rows in would return browses with no visible connection to the query.
 
+### 🔴 Lookup result fields were being prefixed with the browse code (2026-09-01)
+
+The owner's first lookup test with catalog-picked browses failed:
+`'cm001.debtor.DebtorCode' is not a field on that browse`. The browse pick itself
+worked perfectly (CustomerCode -> cm001/cm004/cm005/cm007 "Customer", ItemNumber ->
+pp125/rq025 "Item"); the bug was downstream.
+
+`Artifact.tsx` composed the result field as `<entityOf(uri)>.<column>`, a rule taken
+from the guide's one worked example (`training.className` for browse
+`...bebrowse:...training`). Reading four live field lists killed that rule:
+
+| browse | what QAD actually offers |
+|---|---|
+| bebrowse com.yash.digwish.digsmoketest | `digSmokeTest.testCode` (dotted, CAMEL case) |
+| mfg cm001 | `debtor.DebtorCode` (dotted) |
+| mfg pp125 | `pt_part` (bare) |
+| mfg cm007 | `changeStatus` (bare) |
+
+**QAD returns complete field names for every browse type, and their shape is the
+browse's business, not ours.** Prefixing turned `debtor.DebtorCode` into
+`cm001.debtor.DebtorCode`. It had never failed before only because the resolver
+compares case-insensitively, so `digsmoketest.testCode` still matched
+`digSmokeTest.testCode` for our own BCs. The entity prefix was wrong there too, just
+invisibly.
+
+Fixed in three places, all now reading QAD's list as the only authority: the frontend
+sends the column exactly as typed; `LookupSpec.validate` no longer demands a dot (the
+rule would have rejected QAD's own `pt_part`); and search conditions are no longer
+auto-prefixed. A smoke test that ASSERTED the false rule ("bare column rejected as not
+dotted") was inverted, with the evidence in a comment so it is not restored.
+
+### Lookup fields are now picked from QAD's own list (2026-09-01)
+
+New read-only route `GET /api/browses/fields?uri=...` (auth-gated) returns the fields
+QAD lists for a browse, mapped to field/label/data_type with the field string carried
+VERBATIM, plus `GET /api/browses/search` over the local catalog. The lookup gate turns
+the free-text field box into a select of real field names as soon as a browse is
+chosen, with a "type it instead" toggle and an automatic fall back to typing when the
+fetch fails or the browse returns nothing. Same picker on the fill sources.
+
+Reads are free under working rule 1, so the list loads on dry runs too. That is the
+point: the shape of a field name cannot be derived, so a rehearsal that hides it was
+rehearsing the wrong thing. `stage_lookups` itself is unchanged and still resolves
+nothing on a dry run.
+
+Two real defects were found by review and fixed before this shipped, both invisible
+to the test suite as first written:
+1. **Only a returned failure was handled, not a raised one.** `qad_client` RAISES on
+   the most likely real failures (missing credentials, a bad password, an
+   unresolvable endpoint), so those escaped as a bare 500 "Internal Server Error" and
+   threw away the one sentence that says what to do ("missing QAD_CLIENT_ID ... set
+   them in backend/.env"). Now 502 carrying QAD's own text, verified by reproducing
+   the raise.
+2. **The caller's URI went into the log line raw**, so a URI containing a newline
+   planted a standalone forged record in `backend/logs/app.log`. A probe wrote a fake
+   `[OK] deploy.approved :: by admin` line at ERROR level. In an app whose whole
+   purpose is gating writes that cannot be undone, a forgeable audit line is worth
+   closing. `_log_safe` now flattens newlines, escapes non-ASCII (the cp1252 console
+   trap `logging_setup` warns about) and caps the length. Verified: a forged URI is
+   now one attributed INFO line, and unicode no longer breaks the handler.
+
+The forged lines from the probes remain in the local log; `backend/logs/` is
+gitignored, so they never reach the repo.
+
+### 🔴 A taken BC name is now caught BEFORE the write (2026-09-01)
+
+The owner hit "Entity metadata already exists" five times on one run and ended up with
+a business component literally named **EntityURI**. Full trace from run
+`4ee95cd779aa`: `DeliveryReq` already existed from an earlier run, so every attempt was
+doomed by the name alone. QAD's error carries
+`message "Entity metadata already exists"` + `fieldName "EntityURI"`, which
+`_error_messages` rendered as "Entity metadata already exists (EntityURI)". On the
+fifth hand-typed steer ("please change the entity name as ... (EntityURI)") the model
+took the parenthetical as the new name. It then SUCCEEDED, because EntityURI was free.
+
+**There was no recovery at all.** `fields.autofix` is declared in stages.py with no
+runner, `VALIDATOR_AND_CORRECTOR` in prompts.py is never used, and
+`is_duplicate_entity_error` was never called. All dead code. The user was the retry
+loop.
+
+Fixed by prevention rather than by wiring that dead recovery up:
+- **`bc.metadata.read` is a reliable existence check on this environment** (proven:
+  DeliveryReq and EntityURI come back with one row, NoSuchBcXyz987 with none). Both
+  field stages now ask before the gate opens and warn in plain words, on dry runs too.
+- **The rename is deterministic**: a "Use DeliveryReq2" button passes `bc_name`, which
+  swaps the name on the SAME spec with no model call. A missing prior spec is an error,
+  never a quiet re-roll, because the gate promises the fields do not change.
+- **The message no longer invites the mistake**: the `(EntityURI)` slot name is dropped
+  for "already exist" errors while `(DisplayFormat)` and friends keep theirs, and a
+  rejected create now reads "QAD already has a business component named 'X'. Nothing
+  was created. Use a different name, for example 'X2'."
+
+**🔴 And a security fault of my own, found by review and fixed.** The ADAPTIVE_OFFLINE
+tripwire added earlier only guarded non-GET calls INSIDE `qad_client.call`. The OAuth
+password grant is issued from `get_token`/`_post_token`, outside it, so the new name
+check made `api_test.py` POST real credentials to the live token endpoint while
+claiming in its own docstring to need none. The tripwire now also blocks the login.
+Verified by replacing httpx with a guard that records and refuses: api_test,
+pipeline_test and smoke_test all pass with **zero network attempts**.
+
+Also corrected in passing: `_name_taken` treated any HTTP error (500, 401, 403, a
+non-JSON 504) as "name is free", because an error body has no entityMetadatas. It now
+returns "could not tell" for anything that is not a real 2xx answer, so a broken check
+can never hand back a name QAD already has.
+
+### ABL display-frame labels are now read from the source (2026-09-02)
+
+The owner pasted two real QAD files (`gpekpohu.p.txt`, `gpekpohu.i.txt`) and got
+mechanical labels: `user1` -> "User1", `vehRef1` -> "Veh Ref1". Three faults, all
+verified before any code was written:
+1. `parse_abl` returned **0 tables** for BOTH files. Neither has a `DEFINE TEMP-TABLE`
+   block (the .i only has `define parameter buffer ... for temp-table`), so the
+   deterministic grounding contributed nothing and the model invented the field list
+   from raw text.
+2. The real labels live in DISPLAY FRAMES (`ttEkDc_user1 colon 19 label "Transport
+   License"`), which the parser never looked at. The .i contains the word "label"
+   zero times; all 34 are in the .p.
+3. `bc_builder.py:104` was `naming.to_display_label(f["code"])` unconditionally, so
+   even a correct label could not reach QAD.
+
+Fixed: the parser extracts frame labels (22 found in the real .p, 19 labelled and 3
+`no-label`), `_abl_grounding` now grounds on labels even with no temp-table, the field
+prompt receives a capped label block, `bc_builder` honours a spec label, and the field
+gate shows a Label column marked "from source" where the paste really supplied it.
+
+Review caught three real defects first: `view-as fill-in label "X"` recorded the WIDGET
+as the field name (and `combo-box` dropped the label entirely); the gate marked every
+embedded row "from source" because embedded specs always carry a label built from the
+parent's field code; and two ABL names collapsing to one `code_hint` handed the model
+two contradictory "verbatim" labels. All three fixed and covered by tests.
+
+### 🔴 OPEN, START HERE NEXT: the field list itself is still guesswork (2026-09-02)
+
+Labels were the smaller half. Analysis of the owner's real file, field by field:
+
+**The source describes 23 fields across TWO tables. The generated BC got 9.**
+
+`ttEkDc_mstr` (master, 16 fields): trade_nbr "Order", __qadc01 "Sequence", trade_id
+"EKAER Purchase Order", unload_addr "Site", user1 "Transport License", carrier,
+load_addr "Load address", veh_ref1 "Vehicle 1", veh_ref1_ctry "Country", veh_ref2
+"Vehicle 2", veh_ref2_ctry "Country", submission_date, shp_date, arr_date, domain,
+trade_type.
+`ttEkDcd_det` (detail lines, 7 fields): line "Id", item "Item", wt_um "UM", qty
+"Quantity", order, trade_id, domain.
+
+**Exactly what went wrong, and it is arithmetic, not mystery.** The .p defines three
+frames. The model took frame b's 8 master fields and `qty` from frame c: 8 + 1 = the 9
+on screen. Frame a, which holds the three identifying fields, was ignored entirely.
+
+Consequences:
+- **The primary key is wrong.** The BC has `unloadAddr` as PK. The real key is
+  `trade_nbr` + `__qadc01`, which is how the program's own select procedure looks a
+  record up. Neither field made it onto the screen.
+- **`qty` does not belong there.** It is a line-item field. This source is a
+  header-plus-lines shape: a standalone BC for the header and an EMBEDDED child BC for
+  the lines.
+- **Three dates were missed** because the program displays them through helper
+  variables and assigns them at line 134 (`dSubmDate = ttEkDc_submission_date`,
+  `dLoadDate = ttEkDc_shp_date`, `dUnLoadDate = ttEkDc_arr_date`). Nothing follows that
+  hop, and the new frame-label extraction keys those labels on `submDate`, which will
+  not match a field code of `submissionDate` either.
+
+**What would actually fix it, in the owner's own words: find the include that holds
+`define temp-table ttEkDc_mstr`.** Neither supplied file has it. With that file the
+field list, types and keys all parse deterministically and none of this is inferred.
+Ask the owner for it before designing anything cleverer.
+
+Smaller follow-ups this exposed, none started:
+- variable-to-field assignment tracing (`dSubmDate = ttEkDc_submission_date`)
+- labels stop at the BC: `view_builder.py:40` and `engine.py:721` still derive browse
+  and lookup labels from the code, so a field can read "Vehicle 1" on the form and
+  "Veh Ref1" in the browse
+- pre-existing: a `form` following a `DEFINE TEMP-TABLE` lets the table's last INDEX
+  block run to end of source, pulling frame-mentioned names into the primary key
+  (`_find_block_end` boundary set). Verified, predates this work, untouched.
+
 ## Deferrals — named, not silently dropped (working rule 6)
 
 | # | Deferred | Why | When it must be picked up |

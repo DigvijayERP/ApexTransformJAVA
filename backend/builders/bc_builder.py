@@ -97,11 +97,18 @@ def build_bc_payload(spec: Dict[str, Any],
             pk_counter += 1
         min_max = naming.resolve_min_max(f["dataType"])
         sub_dt = naming.resolve_sub_data_type(f["dataType"])
+        # A label the spec carries is the one the user already reads on the
+        # existing screen ("Load address"). Deriving one from the code is a
+        # fallback, not the intent: it turns vehRef1 into "Veh Ref1", which is
+        # exactly what the owner reported on 2026-09-01.
+        spec_label = f.get("label")
+        label = spec_label.strip() if isinstance(spec_label, str) and spec_label.strip() \
+            else naming.to_display_label(f["code"])
 
         field_obj: Dict[str, Any] = {
             "primaryKey": pk_counter if is_pk else None,
             "entityFieldCode": safe,
-            "fieldLabel": naming.to_display_label(f["code"]),
+            "fieldLabel": label,
             "physicalFieldName": safe,
             "jsonName": safe,
             "dataType": f["dataType"],

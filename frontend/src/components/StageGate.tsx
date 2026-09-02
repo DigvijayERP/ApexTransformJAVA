@@ -77,6 +77,7 @@ export function StageGate() {
               onBrowseUris={(browse_uris) => run(activeStage, { browse_uris })}
               onConfigure={(configs) => run(activeStage, { configs })}
               onParentKey={(parent_key) => run(activeStage, { parent_key })}
+              onBcName={(bc_name) => run(activeStage, { bc_name })}
               onServersidePick={(v) => run(activeStage, v)}
             />
           </div>

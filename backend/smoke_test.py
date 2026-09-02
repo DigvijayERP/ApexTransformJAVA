@@ -100,6 +100,40 @@ def main() -> int:
     problems = naming.validate_spec(bad)
     check("bad spec is rejected", len(problems) >= 3, True)
 
+    section("3b. Rename ladder for a taken BC name")
+    # Offline and deterministic: the whole point is that recovering from a name
+    # clash never goes near a model.
+    check("starts with the name itself, then numbers",
+          naming.name_candidates("DeliveryReq", 4),
+          ["DeliveryReq", "DeliveryReq2", "DeliveryReq3", "DeliveryReq4"])
+    check("a limit of 1 offers only the base",
+          naming.name_candidates("DeliveryReq", 1), ["DeliveryReq"])
+    check("an empty base offers nothing", naming.name_candidates("", 5), [])
+    # A 32-character name is already at the cap, so the BASE must give way to
+    # the suffix. Trimming the suffix instead would hand back the taken name.
+    long_base = "A" * 32
+    ladder = naming.name_candidates(long_base, 3)
+    check("every candidate respects the 32-char cap",
+          [len(n) for n in ladder], [32, 32, 32])
+    check("the base is trimmed, never the suffix",
+          [n[-1] for n in ladder], ["A", "2", "3"])
+    check("and no two candidates are the same", len(set(ladder)), 3)
+    check("a two-digit suffix trims two more characters",
+          naming.name_candidates(long_base, 10)[9], "A" * 30 + "10")
+
+    section("3c. Sanitising a hand-typed BC name")
+    check("lowercase words become PascalCase",
+          naming.sanitize_bc_name("delivery request"), "DeliveryRequest")
+    check("punctuation is dropped", naming.sanitize_bc_name("Delivery-Req_2"), "DeliveryReq2")
+    check("an over-long name is capped",
+          len(naming.sanitize_bc_name("a" * 40)), 32)
+    check("a leading digit is dropped", naming.sanitize_bc_name("9Bad"), "Bad")
+    check("nothing usable gives an empty string", naming.sanitize_bc_name("!!!"), "")
+    check("a sanitised name passes validate_spec's name rule",
+          [p for p in naming.validate_spec(
+              {"bc_pascal": naming.sanitize_bc_name("delivery request"),
+               "fields": SPEC["fields"]}) if "BC name" in p], [])
+
     section("4. BC payload")
     bc = build_bc_payload(SPEC, ident)
     em = bc["payload"]["entityMetadatas"][0]
@@ -126,6 +160,25 @@ def main() -> int:
           ["orderCode", "customerName", "orderDate", "quantity", "statusCode"])
     check("label still reads from the ORIGINAL code",
           [f["fieldLabel"] for f in em["entityFields"]][-1], "Status")
+
+    # A label the spec carries wins over the one derived from the code. The
+    # source the user pasted calls this field "Load address"; deriving it would
+    # send "Load Addr", which is what the owner reported on 2026-09-01.
+    labelled = dict(SPEC)
+    labelled["fields"] = SPEC["fields"] + [
+        {"code": "loadAddr", "dataType": "character", "maxLength": 8,
+         "label": "Load address"},
+        {"code": "unloadAddr", "dataType": "character", "maxLength": 8},
+        {"code": "vehRef1", "dataType": "character", "maxLength": 15,
+         "label": "   "},
+    ]
+    by_code = {f["entityFieldCode"]: f["fieldLabel"] for f in
+               build_bc_payload(labelled, ident)["payload"]
+               ["entityMetadatas"][0]["entityFields"]}
+    check("a label on the spec is sent verbatim", by_code["loadAddr"], "Load address")
+    check("no label still derives one from the code",
+          by_code["unloadAddr"], "Unload Addr")
+    check("a blank label is not a label", by_code["vehRef1"], "Veh Ref1")
     check("dataListCode blank on first save",
           [f["dataListCode"] for f in em["entityFields"] if f["entityFieldCode"] == "statusCode"],
           [""])
@@ -311,9 +364,14 @@ def main() -> int:
     section("13. Lookup — refuses to send an incomplete config")
     blank = lk.BrowseTarget(uri="", label="X", entity="x", result_field="", search_field="")
     check("blank browse target reports 3 problems", len(blank.problems()), 3)
+    # A bare column is VALID. This test asserted the opposite until 2026-09-01,
+    # when reading the live field lists showed QAD offers bare names on some
+    # browses (pp125 -> pt_part, cm007 -> changeStatus) and dotted ones on
+    # others (cm001 -> debtor.DebtorCode). The old rule came from the guide's
+    # single dotted example and would reject QAD's own spelling.
     bare = lk.BrowseTarget(uri="urn:browse:bebrowse:a.b", label="X", entity="x",
-                           result_field="className", search_field="className")
-    check("bare column rejected as not dotted", len(bare.problems()), 2)
+                           result_field="pt_part", search_field="pt_part")
+    check("a bare column is accepted, QAD decides the shape", bare.problems(), [])
     try:
         lk.build_lookup_payload(lk.LookupSpec(field_code="customerName", browse=blank),
                                 SPEC, uris, ident)
@@ -529,6 +587,23 @@ def main() -> int:
                   "ADAPTIVE_OFFLINE" in str(exc), True)
         dry = _asyncio.run(_qc.call("bc.create", payload={}, dry_run=True))
         check("dry run still allowed under the tripwire", dry.dry_run, True)
+        # The login too. `call` only guarded non-GET requests, so a READ under
+        # the tripwire still POSTed the password grant, whose URL carries
+        # QAD_USERNAME and QAD_PASSWORD. Found 2026-09-01, when the new BC name
+        # check made api_test.py log in to QAD on every run.
+        try:
+            _asyncio.run(_qc._post_token("https://example.invalid/token"))
+            check("offline tripwire blocks the QAD login", False, True)
+        except RuntimeError as exc:
+            check("offline tripwire blocks the QAD login",
+                  "ADAPTIVE_OFFLINE" in str(exc), True)
+        # So a live READ cannot reach QAD either: no token, no request.
+        try:
+            _asyncio.run(_qc.call("bc.metadata.read",
+                                  params={"entity_uri": "urn:be:a.B.IB"}))
+            check("a live read cannot get a token offline", False, True)
+        except RuntimeError:
+            check("a live read cannot get a token offline", True, True)
     finally:
         del os.environ["ADAPTIVE_OFFLINE"]
 

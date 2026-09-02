@@ -5,8 +5,8 @@
 // frontend does not declare, and in a gated UI a frame you cannot render is a
 // decision made blind.
 
-import { useState, type ReactNode } from "react";
-import type { ArtifactKind } from "../api";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { api, type ArtifactKind, type BrowseField, type CatalogBrowse } from "../api";
 
 type Bag = Record<string, any>;
 
@@ -29,10 +29,15 @@ function Empty({ children }: { children: ReactNode }) {
   return <p className="muted">{children}</p>;
 }
 
+// The three keys a suggestion row needs to render. Deliberately narrow: the
+// rows arrive either from the stage artifact (untyped) or from the catalog
+// search (CatalogBrowse), and both satisfy this.
+type PickRow = { code: string; description: string; uri: string };
+
 // Ranked guesses from QAD's own browse list, sent by the backend for one field.
 // Clicking one fills the Browse URI input. They are only guesses ranked by
 // name, so the copy says to check one before using it.
-function BrowsePicks({ list, onPick }: { list: Bag[]; onPick: (uri: string) => void }) {
+function BrowsePicks({ list, onPick }: { list: PickRow[]; onPick: (uri: string) => void }) {
   if (!list || list.length === 0) return null;
   return (
     <div className="browse-picks">
@@ -60,21 +65,71 @@ function Text({ a }: { a: Bag }) {
   return <pre className="prose">{a.text ?? a.plan ?? JSON.stringify(a, null, 2)}</pre>;
 }
 
-function FieldSpec({ a }: { a: Bag }) {
+function FieldSpec({ a, onBcName }: { a: Bag; onBcName?: (bc_name: string) => void }) {
   const fields: Bag[] = a.spec?.fields ?? [];
   const renamed: Bag[] = a.renamed_fields ?? [];
   const renamedOf = (code: string) =>
     renamed.find((r) => r.asked_for === code)?.actual_column;
+  const suggested: string | undefined = a.suggested_name ?? undefined;
+
+  // The label QAD will receive is not re-derived here: the payload the backend
+  // already built carries it, so the gate cannot show one thing and send
+  // another. Position matches because the builder emits one entityField per
+  // spec field, in order; the code match is the fallback for a preview that
+  // does not line up.
+  const built: Bag[] = a.payload_preview?.entityMetadatas?.[0]?.entityFields ?? [];
+  const labelFor = (f: Bag, i: number): string => {
+    const byPos = built.length === fields.length ? built[i] : undefined;
+    const byCode = built.find(
+      (b) => b.entityFieldCode === (renamedOf(f.code) ?? f.code));
+    return String((byPos ?? byCode)?.fieldLabel ?? "");
+  };
+  // Having a label proves nothing: an embedded spec gives every field one,
+  // built from the parent's field code, with no source pasted at all. The
+  // backend sets labelFromSource only where the pasted source really did
+  // label that field, so the marker reads that flag and nothing else.
+  const fromSource = (f: Bag) => f.labelFromSource === true;
 
   return (
     <>
+      {/* The backend asked QAD whether the name is free before anything is
+          written. It only sets name_taken when it got a real answer, so an
+          absent key means "free or could not tell", never a false all-clear. */}
+      {a.name_taken && (
+        <Section title="That name is already taken">
+          <p className="warn">
+            QAD already has a business component called <code>{a.bc_pascal}</code>.
+            Nothing will be created if you approve this stage.
+          </p>
+          {suggested ? (
+            <>
+              <p className="muted">
+                <code>{suggested}</code> is free. Using it renames the component
+                only: the fields below stay exactly as they are, and no model is
+                asked to redo anything.
+              </p>
+              {onBcName && (
+                <button className="ghost" onClick={() => onBcName(suggested)}>
+                  Use {suggested}
+                </button>
+              )}
+            </>
+          ) : (
+            <p className="muted">
+              No free name could be suggested. Regenerate this stage and say
+              what to call it instead.
+            </p>
+          )}
+        </Section>
+      )}
+
       <Section title={`${a.bc_pascal}: ${fields.length} field${fields.length === 1 ? "" : "s"}`}>
         <table className="grid">
           <thead>
-            <tr><th>Field</th><th>Type</th><th>Key</th><th>Required</th><th>Lookup</th><th>Values</th></tr>
+            <tr><th>Field</th><th>Label</th><th>Type</th><th>Key</th><th>Required</th><th>Lookup</th><th>Values</th></tr>
           </thead>
           <tbody>
-            {fields.map((f) => {
+            {fields.map((f, i) => {
               const safe = renamedOf(f.code);
               return (
                 <tr key={f.code}>
@@ -83,6 +138,17 @@ function FieldSpec({ a }: { a: Bag }) {
                     {/* A SQL reserved word becomes a differently-named QAD
                         column. Silent renaming is what a gate exists to catch. */}
                     {safe && <span className="rename" title="renamed, SQL reserved word">→ {safe}</span>}
+                  </td>
+                  {/* What the user will read on the QAD screen. A label the
+                      pasted source supplied is marked, because the alternative
+                      is a label made up from the field code. */}
+                  <td>
+                    {labelFor(f, i)}
+                    {fromSource(f) && (
+                      <span className="from-source" title="taken from the source you pasted">
+                        from source
+                      </span>
+                    )}
                   </td>
                   <td>{f.dataType}{f.maxLength ? ` (${f.maxLength})` : ""}</td>
                   {/* Standard specs carry isPrimary booleans; embedded specs
@@ -212,6 +278,270 @@ function entityOf(uri: string): string {
 // otherwise repeat the main result field, which is never what a fill means.
 type LookupCfg = { uri: string; field: string; fills: Record<string, string> };
 
+const BROWSE_URI_PREFIX = "urn:browse:";
+
+/** Well formed enough to ask QAD about. Not a validity check: only QAD knows
+ *  whether a browse exists, and it answers 200 with no rows when it does not. */
+function isBrowseUri(uri: string): boolean {
+  return uri.trim().startsWith(BROWSE_URI_PREFIX)
+    && uri.trim().length > BROWSE_URI_PREFIX.length;
+}
+
+// What we know about one browse's field list. "error" covers both a failed read
+// and a browse QAD listed nothing for, because the user's next move is the same
+// in both cases: type the field by hand.
+type FieldList = {
+  status: "idle" | "loading" | "ok" | "error";
+  fields: BrowseField[];
+  message: string;
+};
+
+const NO_LIST: FieldList = { status: "idle", fields: [], message: "" };
+
+/** The field lists for every browse URI this gate is pointing at, one fetch per
+ *  URI, kept for as long as the gate is open.
+ *
+ *  This is a READ. It reaches QAD but changes nothing, so it runs on a rehearsal
+ *  run too - unlike `stage_lookups`, which still does not resolve on a dry run.
+ *  A field the user cannot see is a decision made blind, and the copy below says
+ *  where the list came from.
+ */
+function useBrowseFields() {
+  const [byUri, setByUri] = useState<Record<string, FieldList>>({});
+  // Which URIs have already been asked about. A ref, not state: the guard has to
+  // be true the moment load() is called, not on the next render.
+  const asked = useRef<Record<string, true>>({});
+
+  const load = useCallback((raw: string) => {
+    const uri = raw.trim();
+    if (!isBrowseUri(uri) || asked.current[uri]) return;
+    asked.current[uri] = true;
+    setByUri((m) => ({ ...m, [uri]: { status: "loading", fields: [], message: "" } }));
+
+    api.browseFields(uri).then((r) => {
+      setByUri((m) => ({
+        ...m,
+        [uri]: r.fields.length
+          ? { status: "ok", fields: r.fields, message: "" }
+          : { status: "error", fields: [], message: r.note ?? "QAD listed no fields for this browse." },
+      }));
+    }).catch((e: unknown) => {
+      // Let a later edit try again: a read can fail for a reason that passes.
+      delete asked.current[uri];
+      setByUri((m) => ({
+        ...m,
+        [uri]: {
+          status: "error", fields: [],
+          message: e instanceof Error ? e.message
+            : "Could not read the fields on this browse.",
+        },
+      }));
+    });
+  }, []);
+
+  return { byUri, load };
+}
+
+/** A field name: picked from QAD's list when we have one, typed when we do not.
+ *
+ *  The text input never goes away. It is the fallback when the read fails, and
+ *  it stays reachable through "type it instead" even when the list loaded, so a
+ *  list that is somehow short of the field the user needs cannot block the run.
+ *  The value is held by the caller, so swapping control keeps it.
+ */
+function FieldChoice({ list, value, placeholder, className, inPill = false, onChange }: {
+  list: FieldList;
+  value: string;
+  placeholder: string;
+  className?: string;
+  /** Rendered inside a fill pill: no status lines (the field above already shows
+   *  them for the same browse) and the click must not reach the pill's label. */
+  inPill?: boolean;
+  onChange: (v: string) => void;
+}) {
+  const [typing, setTyping] = useState(false);
+  const canPick = list.status === "ok" && list.fields.length > 0;
+  const asText = !canPick || typing;
+  // A value typed by hand, or left from an earlier browse, is not in the list.
+  // Carry it as its own option so swapping to the select cannot blank it.
+  const stray = canPick && !!value && !list.fields.some((x) => x.field === value);
+
+  return (
+    <>
+      {asText ? (
+        <input
+          className={className}
+          value={value}
+          placeholder={placeholder}
+          onClick={inPill ? (e) => e.preventDefault() : undefined}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      ) : (
+        <select className={className} value={value}
+                onChange={(e) => onChange(e.target.value)}>
+          <option value="">Choose a field</option>
+          {stray && <option value={value}>{value} (typed by hand)</option>}
+          {list.fields.map((x) => (
+            <option key={x.field} value={x.field}>
+              {x.label ? `${x.field} (${x.label})` : x.field}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {!inPill && list.status === "loading" && (
+        <p className="muted">Reading the fields on this browse...</p>
+      )}
+      {!inPill && list.status === "error" && <p className="warn">{list.message}</p>}
+
+      {canPick && (
+        <button type="button" className="swap-input"
+                onClick={() => setTyping(!typing)}>
+          {typing ? "pick from the list" : "type it instead"}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** A search over the local browse catalog, for when the per-field suggestions
+ *  missed. Reads config/browses.json on the server and never touches QAD. */
+function BrowseSearch({ onPick }: { onPick: (uri: string) => void }) {
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<CatalogBrowse[]>([]);
+
+  useEffect(() => {
+    const text = q.trim();
+    if (text.length < 2) { setHits([]); return; }
+    const t = setTimeout(() => {
+      api.browseSearch(text).then((r) => setHits(r.browses)).catch(() => setHits([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  return (
+    <>
+      <label className="field">
+        <span>Or search the browse list by name</span>
+        <input value={q} placeholder="customer"
+               onChange={(e) => setQ(e.target.value)} />
+      </label>
+      <BrowsePicks list={hits} onPick={onPick} />
+    </>
+  );
+}
+
+/** One field's lookup configuration: which browse, which field on it, and which
+ *  other form fields it fills in. */
+function LookupFieldConfig({ f, c, list, set, load }: {
+  f: Bag;
+  c: LookupCfg;
+  list: FieldList;
+  set: (patch: Partial<LookupCfg>) => void;
+  load: (uri: string) => void;
+}) {
+  const uri = c.uri.trim();
+  const opts: Bag[] = f.auto_populate_options ?? [];
+
+  // Typing a URI fires one request when the typing stops, not one per keystroke.
+  // A clicked suggestion does not wait: it calls load() itself, and the per-URI
+  // cache makes this timer a no-op when it lands.
+  useEffect(() => {
+    if (!isBrowseUri(uri)) return;
+    const t = setTimeout(() => load(uri), 400);
+    return () => clearTimeout(t);
+  }, [uri, load]);
+
+  const pick = (picked: string) => { set({ uri: picked }); load(picked); };
+
+  return (
+    <Section title={f.label ?? f.code}>
+      <label className="field">
+        <span>Browse URI (which records to choose from)</span>
+        <input
+          value={c.uri}
+          placeholder="urn:browse:bebrowse:com.yash.digwish.digsmoketest"
+          onChange={(e) => set({ uri: e.target.value })}
+        />
+      </label>
+
+      <BrowsePicks list={f.browse_candidates ?? []} onPick={pick} />
+      <BrowseSearch onPick={pick} />
+
+      {/* A div, not a label: the control below is followed by the "type it
+          instead" button, so the label would end up wrapping two controls and
+          clicking the button would count as clicking the field. */}
+      <div className="field">
+        <span>Field on that browse (the value returned)</span>
+      </div>
+      <FieldChoice
+        list={list}
+        value={c.field}
+        placeholder="testCode"
+        onChange={(v) => set({ field: v })}
+      />
+
+      {list.status === "ok" && (
+        <p className="muted">
+          These are the fields QAD lists for this browse, read just now. Reading
+          the list changes nothing in QAD, so it works on a rehearsal run too.
+        </p>
+      )}
+
+      {c.field.trim() && (
+        <p className="muted">
+          Result and search field: <code>{c.field.trim()}</code>. On a live
+          run this is matched against the fields QAD lists for this browse,
+          and QAD's own spelling is what gets sent.
+        </p>
+      )}
+
+      {opts.length > 0 && (
+        <>
+          <span className="fills-label">Also fill in when a value is picked</span>
+          <div className="fills">
+            {opts.map((o) => {
+              const checked = o.target in c.fills;
+              return (
+                <label key={o.target} className="dry-pill">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const fills = { ...c.fills };
+                      if (e.target.checked) fills[o.target] = "";
+                      else delete fills[o.target];
+                      set({ fills });
+                    }}
+                  />
+                  {o.label}
+                  {checked && (
+                    <FieldChoice
+                      list={list}
+                      inPill
+                      className="fill-source"
+                      value={c.fills[o.target]}
+                      placeholder="from which browse column?"
+                      onChange={(v) => set({ fills: { ...c.fills, [o.target]: v } })}
+                    />
+                  )}
+                </label>
+              );
+            })}
+          </div>
+          {Object.keys(c.fills).length > 0 && (
+            <p className="muted">
+              Each ticked field needs the browse column that supplies it,
+              for example testDate. It is matched against the columns QAD
+              lists for that browse when you build.
+            </p>
+          )}
+        </>
+      )}
+    </Section>
+  );
+}
+
 function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => void }) {
   const fields: Bag[] = a.fields ?? [];
   const [cfg, setCfg] = useState<Record<string, LookupCfg>>(
@@ -221,25 +551,36 @@ function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => vo
   const set = (code: string, patch: Partial<LookupCfg>) =>
     setCfg((c) => ({ ...c, [code]: { ...c[code], ...patch } }));
 
+  // One field list per browse URI, shared by every field on this gate: two
+  // form fields pointing at the same browse ask QAD once.
+  const { byUri, load } = useBrowseFields();
+
   const ready = fields.every((f) => {
     const c = cfg[f.code];
     return c?.uri.trim() && c?.field.trim()
       && Object.values(c.fills).every((src) => src.trim());
   });
 
+  // Send the column EXACTLY as typed. Do not build "<entity>.<column>" here.
+  // QAD returns complete field names already, and their shape differs per
+  // browse: digSmokeTest.testCode on one of ours, debtor.DebtorCode on cm001,
+  // but a bare pt_part on pp125 and changeStatus on cm007. Prefixing turned
+  // debtor.DebtorCode into cm001.debtor.DebtorCode and QAD rejected it. The
+  // backend resolves whatever is typed against QAD's own list for this browse
+  // and sends back QAD's exact spelling, so composing here can only be wrong.
   const build = () => onConfigure?.(fields.map((f) => {
     const c = cfg[f.code];
     const entity = entityOf(c.uri);
-    const dotted = `${entity}.${c.field.trim()}`;
+    const column = c.field.trim();
     return {
       field_code: f.code,
       browse_uri: c.uri.trim(),
       browse_label: entity.charAt(0).toUpperCase() + entity.slice(1),
       browse_entity: entity,
-      result_field: dotted,
-      search_field: dotted,
+      result_field: column,
+      search_field: column,
       additional_results: Object.entries(c.fills).map(([target, source]) => ({
-        field: `${entity}.${source.trim()}`,
+        field: source.trim(),
         target,
       })),
     };
@@ -251,87 +592,16 @@ function LookupForm({ a, onConfigure }: { a: Bag; onConfigure?: (c: Bag[]) => vo
         <p className="muted">{a.hint}</p>
       </Section>
 
-      {fields.map((f) => {
-        const c = cfg[f.code];
-        const entity = entityOf(c.uri);
-        const opts: Bag[] = f.auto_populate_options ?? [];
-        return (
-          <Section key={f.code} title={f.label ?? f.code}>
-            <label className="field">
-              <span>Browse URI (which records to choose from)</span>
-              <input
-                value={c.uri}
-                placeholder="urn:browse:bebrowse:com.yash.digwish.digsmoketest"
-                onChange={(e) => set(f.code, { uri: e.target.value })}
-              />
-            </label>
-
-            <BrowsePicks
-              list={f.browse_candidates ?? []}
-              onPick={(uri) => set(f.code, { uri })}
-            />
-
-            <label className="field">
-              <span>Field on that browse (the value returned)</span>
-              <input
-                value={c.field}
-                placeholder="testCode"
-                onChange={(e) => set(f.code, { field: e.target.value })}
-              />
-            </label>
-
-            {entity && c.field.trim() && (
-              <p className="muted">
-                Result and search field → <code>{entity}.{c.field.trim()}</code>
-              </p>
-            )}
-
-            {opts.length > 0 && (
-              <>
-                <span className="fills-label">Also fill in when a value is picked</span>
-                <div className="fills">
-                  {opts.map((o) => {
-                    const checked = o.target in c.fills;
-                    return (
-                      <label key={o.target} className="dry-pill">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            const fills = { ...c.fills };
-                            if (e.target.checked) fills[o.target] = "";
-                            else delete fills[o.target];
-                            set(f.code, { fills });
-                          }}
-                        />
-                        {o.label}
-                        {checked && (
-                          <input
-                            className="fill-source"
-                            value={c.fills[o.target]}
-                            placeholder="from which browse column?"
-                            onClick={(e) => e.preventDefault()}
-                            onChange={(e) => set(f.code, {
-                              fills: { ...c.fills, [o.target]: e.target.value },
-                            })}
-                          />
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
-                {Object.keys(c.fills).length > 0 && (
-                  <p className="muted">
-                    Each ticked field needs the browse column that supplies it,
-                    for example testDate. It is matched against the columns QAD
-                    lists for that browse when you build.
-                  </p>
-                )}
-              </>
-            )}
-          </Section>
-        );
-      })}
+      {fields.map((f) => (
+        <LookupFieldConfig
+          key={f.code}
+          f={f}
+          c={cfg[f.code]}
+          list={byUri[cfg[f.code].uri.trim()] ?? NO_LIST}
+          set={(patch) => set(f.code, patch)}
+          load={load}
+        />
+      ))}
 
       {onConfigure && (
         <button className="primary" disabled={!ready} onClick={build}>
@@ -570,18 +840,20 @@ function ScreenRuleGate({ a }: { a: Bag }) {
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 export function Artifact({ kind, artifact, onBrowseUris, onConfigure, onParentKey,
-                          onServersidePick }: {
+                          onBcName, onServersidePick }: {
   kind: ArtifactKind | undefined;
   artifact: Bag;
   onBrowseUris?: (v: Record<string, string>) => void;
   onConfigure?: (c: Bag[]) => void;
   onParentKey?: (key: string) => void;
+  /** Field gate: re-run the stage under a different component name. */
+  onBcName?: (bc_name: string) => void;
   onServersidePick?: (v: { bc_name?: string; target_class?: string; instruction?: string }) => void;
 }) {
   switch (kind) {
     case "text":            return <Text a={artifact} />;
     case "field_spec":
-    case "field_spec_diff": return <FieldSpec a={artifact} />;
+    case "field_spec_diff": return <FieldSpec a={artifact} onBcName={onBcName} />;
     case "form_layout":     return <FormLayout a={artifact} />;
     case "handler_code":    return <HandlerCode a={artifact} onBrowseUris={onBrowseUris} />;
     case "view_config":     return <ViewConfig a={artifact} />;

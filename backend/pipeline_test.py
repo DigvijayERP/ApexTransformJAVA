@@ -24,6 +24,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+import qad_client
+from builders import naming
+from builders.identity import AppIdentity
 from core import engine, llm, stages, store
 
 FAILURES: list = []
@@ -74,6 +77,44 @@ HANDLER_TS = "\n".join([
 
 CALLS: list = []
 
+# The field stages ask QAD whether the BC name is already taken before anything
+# is written. That is a GET, so the ADAPTIVE_OFFLINE tripwire inside `call`
+# does not stop it - this stub answers it instead, and the suite stays fully
+# offline. (The login itself is blocked offline as well since 2026-09-01, but a
+# stub that answers is better than an exception the check has to swallow.)
+# A name is FREE unless a test puts it in TAKEN_NAMES.
+TAKEN_NAMES: set = set()
+METADATA_READS: list = []
+
+
+def _name_of(entity_uri: str) -> str:
+    """'urn:be:<module>.<Name>.I<Name>' -> '<Name>'."""
+    parts = entity_uri.split(".")
+    return parts[-2] if len(parts) >= 2 else ""
+
+
+def _install_name_check_stub() -> None:
+    real = qad_client.call
+
+    async def call(endpoint_id, *, method=None, payload=None, params=None,
+                   dry_run=False, timeout=60.0):
+        # Only the live existence check. The dropdown second-save reads the
+        # same endpoint as a DRY RUN, and that must keep its real behaviour so
+        # the rehearsal transcript still records it.
+        if endpoint_id == "bc.metadata.read" and not dry_run:
+            uri = (params or {}).get("entity_uri", "")
+            METADATA_READS.append(uri)
+            rows = [{"entityURI": uri}] if _name_of(uri) in TAKEN_NAMES else []
+            return qad_client.QadResult(
+                ok=bool(rows), status_code=200,
+                data={"data": {"entityMetadatas": rows}},
+                request={"method": "GET", "url": "stubbed",
+                         "headers": {"Authorization": "Bearer <token>"}, "payload": None})
+        return await real(endpoint_id, method=method, payload=payload, params=params,
+                          dry_run=dry_run, timeout=timeout)
+
+    qad_client.call = call
+
 
 async def stub(system: str, user: str, role: str, json_mode: bool) -> str:
     """Answer by which placeholder prompt was sent."""
@@ -105,6 +146,7 @@ async def stub(system: str, user: str, role: str, json_mode: bool) -> str:
 
 async def main() -> int:
     llm.set_stub(stub)
+    _install_name_check_stub()
     tmp = Path(tempfile.mkdtemp(prefix="adaptive_pipeline_")) / "run.db"
     db = {"db_path": tmp}
     await store.init_db(tmp)
@@ -159,6 +201,10 @@ async def main() -> int:
           art["renamed_fields"], [{"asked_for": "status", "actual_column": "statusCode"}])
     check("and raised as a warning",
           "SQL reserved word" in out["warnings"][0], True)
+    # The name was checked against QAD before anything was written. It is free,
+    # so the gate says nothing at all about it.
+    check("free name adds no key to the artifact", "name_taken" in art, False)
+    check("and no second warning", len(out["warnings"]), 1)
     check("stage declares three writes", out["writes"],
           ["bc.create", "bc.metadata.read", "bc.metadata.write"])
 
@@ -603,6 +649,280 @@ async def main() -> int:
 
     qad_client.call = real_call
     llm.set_stub(stub)
+
+    # ── The name clash. Regression for run 4ee95cd779aa, 2026-09-01 ─────────
+    # 'DeliveryReq' already existed in QAD, so bc.create was rejected five times
+    # with "Entity metadata already exists (EntityURI)". Nothing checked the
+    # name before the write, so the only way out was a free-text steer - and the
+    # fifth steer made the model read the parenthetical as the new name and
+    # build a component literally called EntityURI. Three things stop that now:
+    # the check below, the deterministic rename, and a message that names the
+    # component instead of a metadata slot.
+    section("16. A taken BC name is caught before anything is written")
+    ident = AppIdentity.from_config()
+    TAKEN_NAMES.add("PipelineOrder")
+    run8 = await store.create_run("I need an order tracking BC", dry_run=True, **db)
+    await engine.run_stage(run8, "requirements", **db)
+    await engine.approve_stage(run8, "requirements", **db)
+
+    out = await engine.run_stage(run8, "fields", **db)
+    art = out["artifact"]
+    check("the gate says the name is taken", art["name_taken"], True)
+    check("and offers the next free one", art["suggested_name"], "PipelineOrder2")
+    check("the warning names the component",
+          any("'PipelineOrder' already exists" in w for w in out["warnings"]), True)
+    check("and says approving would be rejected",
+          any("will be rejected" in w for w in out["warnings"]), True)
+    check("nothing was written to find that out",
+          await store.writes_for_run(run8, **db), [])
+
+    section("17. The rename is deterministic, never a model steer")
+    calls_before = len(CALLS)
+    out = await engine.run_stage(run8, "fields", bc_name="PipelineOrder2", **db)
+    art = out["artifact"]
+    check("the chosen name replaces the model's",
+          art["spec"]["bc_pascal"], "PipelineOrder2")
+    check("the entity uri follows it", art["entity_uri"],
+          "urn:be:com.yash.digwish.PipelineOrder2.IPipelineOrder2")
+    check("no model call was made for the rename", len(CALLS), calls_before)
+    check("the fields are exactly the ones already shown",
+          [f["code"] for f in art["spec"]["fields"]],
+          ["orderCode", "customerName", "orderDate", "status"])
+    check("and the new name is free, so the clash key is gone",
+          "name_taken" in art, False)
+
+    # A hand-typed name is sanitised through the same rules validate_spec
+    # enforces, and the change is stated rather than made quietly.
+    long_ask = "pipeline order tracking component xyz"
+    out = await engine.run_stage(run8, "fields", bc_name=long_ask, **db)
+    art = out["artifact"]
+    check("lowercase and over-long is sanitised",
+          art["spec"]["bc_pascal"], "PipelineOrderTrackingComponentXy")
+    check("the spec still validates", naming.validate_spec(art["spec"]), [])
+    check("and the user is told what happened",
+          any(f"'{long_ask}' was changed to "
+              f"'PipelineOrderTrackingComponentXy'" in w for w in out["warnings"]), True)
+
+    section("18. What a rejected create actually says")
+    dup_body = {"submitResult": {"success": False, "errorSeverity": 1, "errors": [
+        {"message": "Entity metadata already exists", "fieldName": "EntityURI"}]}}
+    msgs = qad_client._error_messages(dup_body)
+    check("EntityURI is a metadata slot, so it is not appended",
+          msgs, ["Entity metadata already exists"])
+    check("a real field name is still appended, where it helps",
+          qad_client._error_messages({"submitResult": {"errors": [
+              {"message": "Invalid value for field data type: integer",
+               "fieldName": "DisplayFormat"}]}}),
+          ["Invalid value for field data type: integer (DisplayFormat)"])
+
+    rejected = qad_client.QadResult(
+        ok=False, status_code=200, data=dup_body, messages=msgs,
+        error="; ".join(msgs),
+        request={"method": "POST", "url": "stubbed",
+                 "headers": {"Authorization": "Bearer <token>"}, "payload": {}})
+    check("qad_client reads it as a name clash",
+          qad_client.is_duplicate_entity_error(rejected), True)
+
+    prev_call = qad_client.call
+
+    async def _rejecting_call(endpoint_id, *, method=None, payload=None, params=None,
+                              dry_run=False, timeout=60.0):
+        if endpoint_id == "bc.create":
+            return rejected
+        return await prev_call(endpoint_id, method=method, payload=payload,
+                               params=params, dry_run=dry_run, timeout=timeout)
+
+    qad_client.call = _rejecting_call
+    run9 = await store.create_run("I need an order tracking BC", dry_run=True, **db)
+    await engine.run_stage(run9, "requirements", **db)
+    await engine.approve_stage(run9, "requirements", **db)
+    await engine.run_stage(run9, "fields", **db)
+    res = await engine.approve_stage(run9, "fields", **db)
+    check("the approve reports the rejection", res["approved"], False)
+    check("the message names the component",
+          "QAD already has a business component named 'PipelineOrder'" in res["error"],
+          True)
+    check("it says nothing was created", "Nothing was created" in res["error"], True)
+    check("it offers a name that is actually free",
+          "'PipelineOrder2'" in res["error"], True)
+    check("and it never invites a rename to EntityURI",
+          "EntityURI" in res["error"], False)
+    check("the write row carries the same message",
+          res["writes"][0]["error"], res["error"])
+    qad_client.call = prev_call
+
+    section("19. A name check that cannot run says nothing either way")
+    async def _unreachable(endpoint_id, *, method=None, payload=None, params=None,
+                           dry_run=False, timeout=60.0):
+        if endpoint_id == "bc.metadata.read" and not dry_run:
+            raise RuntimeError("Cannot authenticate to QAD, missing QAD_PASSWORD.")
+        return await prev_call(endpoint_id, method=method, payload=payload,
+                               params=params, dry_run=dry_run, timeout=timeout)
+
+    qad_client.call = _unreachable
+    check("_name_taken cannot tell", await engine._name_taken("PipelineOrder", ident), None)
+    check("and no name is suggested",
+          await engine._first_free_name("PipelineOrder", ident), None)
+
+    run10 = await store.create_run("I need an order tracking BC", dry_run=True, **db)
+    await engine.run_stage(run10, "requirements", **db)
+    await engine.approve_stage(run10, "requirements", **db)
+    out = await engine.run_stage(run10, "fields", **db)
+    art = out["artifact"]
+    # 'PipelineOrder' IS taken, but the check could not run. Silence is the only
+    # honest answer: a failed check must not become a false all-clear either.
+    check("no false alarm", "name_taken" in art, False)
+    check("no extra warning", len(out["warnings"]), 1)
+    check("and the stage still built its payload",
+          "entityMetadatas" in art["payload_preview"], True)
+    res = await engine.approve_stage(run10, "fields", **db)
+    check("and still approves", res["approved"], True)
+    qad_client.call = prev_call
+
+    section("20. An error answer is 'could not tell', never 'free'")
+    # A 500, a 401, a 403 and an HTML 504 all carry no entityMetadatas, which
+    # is exactly what a free name looks like. Reading the body without looking
+    # at the status reported every one of them as all-clear, and
+    # _first_free_name then handed back a name QAD already has.
+    def _answering(**fields):
+        async def _call(endpoint_id, *, method=None, payload=None, params=None,
+                        dry_run=False, timeout=60.0):
+            if endpoint_id == "bc.metadata.read" and not dry_run:
+                return qad_client.QadResult(
+                    request={"method": "GET", "url": "stubbed",
+                             "headers": {"Authorization": "Bearer <token>"},
+                             "payload": None},
+                    **fields)
+            return await prev_call(endpoint_id, method=method, payload=payload,
+                                   params=params, dry_run=dry_run, timeout=timeout)
+        return _call
+
+    broken = [
+        ("HTTP 500", {"ok": False, "status_code": 500,
+                      "data": {"submitResult": {"success": False, "errors": []}}}),
+        ("a non-JSON 504", {"ok": False, "status_code": 504,
+                            "error": "QAD returned a non-JSON response (HTTP 504)"}),
+        ("HTTP 401 after a failed refresh", {"ok": False, "status_code": 401,
+                                             "data": {}}),
+        ("HTTP 403 on permissions", {"ok": False, "status_code": 403, "data": {}}),
+        ("no answer at all", {"ok": False, "error": "Could not reach QAD: timeout"}),
+    ]
+    for label, fields in broken:
+        qad_client.call = _answering(**fields)
+        check(f"{label} cannot tell",
+              await engine._name_taken("PipelineOrder", ident), None)
+        check(f"{label} suggests no name",
+              await engine._first_free_name("PipelineOrder", ident), None)
+    qad_client.call = prev_call
+    # And the answer QAD really gives for a free name still reads as free: it
+    # is HTTP 200 with an empty list, which is ok=False, so `ok` on its own
+    # could never have been the test.
+    check("a 200 with no rows is still free",
+          await engine._name_taken("NoSuchBcXyz987", ident), False)
+
+    section("21. 'Use <name>' after a failed attempt renames, never re-rolls")
+    # store.get_stage returns the LATEST attempt and a stage that raises is
+    # saved as one holding only {"error": ...}. The gate keeps showing the old
+    # artifact and its button, so the click used to land with no spec in
+    # context and fall through to the model, re-rolling the field list under a
+    # user who had asked for nothing but a rename.
+    TAKEN_NAMES.add("PipelineOrder")
+    run11 = await store.create_run("I need an order tracking BC", dry_run=True, **db)
+    await engine.run_stage(run11, "requirements", **db)
+    await engine.approve_stage(run11, "requirements", **db)
+    shown = (await engine.run_stage(run11, "fields", **db))["artifact"]
+    check("the gate shows the clash", shown["name_taken"], True)
+
+    async def _spec_less(system, user, role, json_mode):
+        CALLS.append("field builder with no spec")
+        return json.dumps({"nope": True})
+
+    llm.set_stub(_spec_less)
+    try:
+        await engine.run_stage(run11, "fields", instruction="make it shorter", **db)
+        check("the steer in between fails", False, True)
+    except engine.StageError:
+        check("the steer in between fails", True, True)
+    llm.set_stub(stub)
+    check("and it is the latest stored attempt now",
+          "error" in (await store.get_stage(run11, "fields", **db))["artifact"], True)
+
+    calls_before = len(CALLS)
+    out = await engine.run_stage(run11, "fields", bc_name="PipelineOrder2", **db)
+    art = out["artifact"]
+    check("the rename still makes no model call", len(CALLS), calls_before)
+    check("the chosen name is used", art["spec"]["bc_pascal"], "PipelineOrder2")
+    check("and the fields are the ones the gate showed",
+          [f["code"] for f in art["spec"]["fields"]],
+          [f["code"] for f in shown["spec"]["fields"]])
+
+    # With nothing stored to rename, the answer is an error the user can act
+    # on, not a quiet model call that invents a different field list.
+    run12 = await store.create_run("I need an order tracking BC", dry_run=True, **db)
+    await engine.run_stage(run12, "requirements", **db)
+    await engine.approve_stage(run12, "requirements", **db)
+    calls_before = len(CALLS)
+    try:
+        await engine.run_stage(run12, "fields", bc_name="PipelineOrder3", **db)
+        check("a rename with nothing to rename is refused", False, True)
+    except engine.StageError as exc:
+        check("a rename with nothing to rename is refused",
+              "no saved field design to rename" in str(exc), True)
+    check("and the model was not asked instead", len(CALLS), calls_before)
+    TAKEN_NAMES.clear()
+
+    section("22. The label block and the 'from source' marker")
+    # Two ABL names, one field code. The block is keyed on the code, so without
+    # a dedupe the model reads two different labels under a heading that says
+    # "verbatim" and picks one at random.
+    clash = engine._abl_grounding(
+        'define variable cLoadAddr as character no-undo.\n'
+        'form ttEkDc_load_addr colon 19 label "Load address" format "x(8)":U\n'
+        'with frame a side-labels width 80.\n'
+        'form cLoadAddr colon 40 label "Delivery point" format "x(35)":U\n'
+        'with frame b side-labels width 80.\n')
+    block = engine._frame_label_block(clash)
+    check("one row per field code in the prompt block",
+          [ln for ln in block.splitlines() if "loadAddr" in ln],
+          ['  loadAddr -> "Load address"'])
+
+    # The gate says a label was taken from the paste. That claim is checked
+    # against the paste, never inferred from the field merely having a label.
+    src_labels = engine._abl_grounding(
+        'define variable cX as character no-undo.\n'
+        'form ttEkDc_load_addr colon 19 label "Load address" format "x(8)":U\n'
+        '     ttEkDc_user1     colon 19 label "Transport License" format "x(30)":U\n'
+        'with frame a side-labels width 80.\n')
+    spec_std = {"fields": [
+        {"code": "loadAddr", "label": "Load address"},   # verbatim from the frame
+        {"code": "user1", "label": "User1"},             # mechanical, not the frame's
+        {"code": "notes"},                               # no label at all
+    ]}
+    engine._mark_source_labels(spec_std, src_labels)
+    check("only the label the source really wrote is marked",
+          [f["code"] for f in spec_std["fields"] if f.get("labelFromSource")],
+          ["loadAddr"])
+
+    # Every embedded field carries a label, built from the parent's field code
+    # by _mirror_parent_pks. Nothing there came from a paste, and on this run
+    # there was no paste at all.
+    mirrored, _ = engine._mirror_parent_pks(
+        [{"code": "Notes"}], [{"code": "DomainCode"}, {"code": "ItemCode"}],
+        {"code": "EmbCode"}, "EmbTest")
+    spec_emb = {"fields": mirrored}
+    engine._mark_source_labels(spec_emb, engine._abl_grounding(""))
+    check("an embedded spec with no paste marks nothing as from source",
+          [f["code"] for f in spec_emb["fields"] if f.get("labelFromSource")], [])
+    check("and every embedded field does carry a label, which is why",
+          all(f.get("label") for f in spec_emb["fields"]), True)
+
+    # Every name a field stage checked, standard and embedded, was answered by
+    # the stub. If a check ever routes around it, this list changes and the
+    # suite stops being provably offline.
+    check("every name check was answered offline, none reached QAD",
+          sorted({_name_of(u) for u in METADATA_READS}),
+          ["EmbShip", "NoSuchBcXyz987", "PipelineOrder", "PipelineOrder2",
+           "PipelineOrderTrackingComponentXy", "PoInspect"])
 
     print()
     if FAILURES:

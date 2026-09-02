@@ -668,6 +668,8 @@ table.grid th, table.grid td { text-align: left; padding: 6px 8px; border-bottom
 table.grid th { color: var(--text-muted); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; }
 td.vals { color: var(--text-muted); font-size: 12px; }
 .rename { color: var(--warning); font-family: var(--font-mono); font-size: 11.5px; margin-left: 6px; }
+/* Marks a field label that came from the pasted source, not from the code. */
+.from-source { color: var(--text-muted); font-size: 11px; margin-left: 6px; }
 
 dl.pairs { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 0; font-size: 13px; }
 dl.pairs dt { color: var(--text-muted); }
@@ -772,3 +774,25 @@ details.writes { margin-top: 16px; }
   margin-left: auto; font-family: var(--font-mono); font-size: 11px;
   color: var(--text-muted); white-space: nowrap;
 }
+
+/* "type it instead": the way out of the field picker. It is always offered,
+   because a field list we could not read must never block a run. Styled as a
+   quiet link rather than a button so it does not compete with the control it
+   sits under. */
+.swap-input {
+  display: inline-block; margin: 2px 0 8px; padding: 0;
+  background: none; border: none; color: var(--text-muted);
+  font-size: 11.5px; text-decoration: underline;
+}
+.swap-input:hover:not(:disabled) {
+  background: none; border: none; color: var(--accent);
+}
+
+/* The picker inside a fill pill. Same width and weight as the text input it
+   replaces, so ticking a fill does not resize the pill. */
+.fills .dry-pill select.fill-source {
+  width: 180px; font-size: 12px; font-weight: 400; padding: 3px 8px;
+  background: var(--hover); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text);
+}
+.fills .dry-pill .swap-input { margin: 0 0 0 2px; font-size: 11px; }

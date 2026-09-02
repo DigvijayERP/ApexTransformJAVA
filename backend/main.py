@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from core import auth, store
 from core.docs_loader import docs_loader
 from core.logging_setup import configure_logging, get_logger
-from routers import health, runs
+from routers import browses, health, runs
 
 logger = get_logger("adaptive.main")
 
@@ -62,6 +62,9 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(runs.router)
+# Read-only. The lookup gate asks it what fields a browse offers, so the user
+# picks a field instead of typing a name they cannot know.
+app.include_router(browses.router)
 
 
 @app.get("/")

@@ -106,6 +106,18 @@ _tokens = _TokenCache()
 
 
 async def _post_token(url: str) -> Dict[str, Any]:
+    # The offline tripwire, at the one place a token is really fetched. The
+    # copy in `call` only guards non-GET requests, so a READ under
+    # ADAPTIVE_OFFLINE still POSTed the password grant, and that URL carries
+    # QAD_USERNAME and QAD_PASSWORD in its query string. Found 2026-09-01: the
+    # new pre-write name check made api_test.py log in to QAD on every run.
+    # Nothing can cache a token offline, so with this in place no live request
+    # can be sent at all - a read included.
+    if os.environ.get("ADAPTIVE_OFFLINE"):
+        raise RuntimeError(
+            "Blocked the QAD login: ADAPTIVE_OFFLINE is set. This process is "
+            "not allowed to contact QAD. Stub the call or run it as a dry run."
+        )
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url)
         if resp.is_error:
@@ -164,9 +176,25 @@ def clear_token_cache() -> None:
 
 
 # ── Response handling ─────────────────────────────────────────────────────────
+# When a create is rejected for a name clash, QAD puts a METADATA SLOT in
+# fieldName, not a field of the component:
+#     {"message": "Entity metadata already exists", "fieldName": "EntityURI"}
+# Rendering that as "Entity metadata already exists (EntityURI)" is what led, on
+# run 4ee95cd779aa (2026-09-01), to a steer quoting the message back and the
+# model reading the parenthetical as the new name - it then built a component
+# literally called EntityURI, which still sits in QAD. The parenthetical is kept
+# everywhere else: it is genuinely useful there, e.g. "Invalid value for field
+# data type: integer (DisplayFormat)".
+_METADATA_SLOT_FIELDS = frozenset({"entityuri"})
+
+
+def _slot_not_field(msg: str, fld: str) -> bool:
+    return fld.lower() in _METADATA_SLOT_FIELDS and "already exist" in msg.lower()
+
+
 def _error_messages(body: Dict[str, Any]) -> list:
     """Plain-English messages out of QAD's submitResult envelope, so a user sees
-    'Entity metadata already exists (EntityURI)' rather than a raw JSON dump."""
+    'Entity metadata already exists' rather than a raw JSON dump."""
     errs = (body or {}).get("submitResult", {}).get("errors") or []
     out = []
     for e in errs:
@@ -174,7 +202,9 @@ def _error_messages(body: Dict[str, Any]) -> list:
             msg = (e.get("message") or "").strip()
             fld = (e.get("fieldName") or "").strip()
             if msg:
-                out.append(f"{msg} ({fld})" if fld and fld.lower() not in msg.lower() else msg)
+                show_field = (fld and fld.lower() not in msg.lower()
+                              and not _slot_not_field(msg, fld))
+                out.append(f"{msg} ({fld})" if show_field else msg)
         elif e:
             out.append(str(e))
     return out

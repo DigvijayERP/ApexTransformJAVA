@@ -156,16 +156,47 @@ export interface Health {
   docs: { all_grounded: boolean; ungrounded: string[] };
 }
 
+/** One field QAD says a browse offers. `field` is QAD's exact string and is what
+ *  goes into the lookup payload, so it is never reshaped on the way through. */
+export interface BrowseField {
+  field: string;
+  label: string;
+  data_type: string;
+}
+
+/** The answer from /api/browses/fields. `note` is set when QAD answered fine but
+ *  listed nothing, which is what an unknown browse code looks like. */
+export interface BrowseFields {
+  uri: string;
+  fields: BrowseField[];
+  note?: string;
+}
+
+/** One row of the local browse catalog (config/browses.json). */
+export interface CatalogBrowse {
+  code: string;
+  description: string;
+  view: string;
+  tables: string[];
+  term: string;
+  is_lookup: boolean;
+  is_power: boolean;
+  is_drilldown: boolean;
+  uri: string;
+}
+
 export interface StageInput {
   instruction?: string;
   browse_uris?: Record<string, string>;
   configs?: Record<string, any>[];
   /** Embedded requirements gate: override the LLM's parent choice. */
   parent_key?: string;
-  /** Server-side target gate: override the component, or name the validation
-   *  to remove. Explicit, like parent_key, because each is one deterministic
-   *  override the gate offers by name. */
+  /** Rename the component without involving a model. The field gate sends it
+   *  when QAD already has that name; the server-side target gate sends it to
+   *  choose a different component. Explicit, like parent_key, because each is
+   *  one deterministic override the gate offers by name. */
   bc_name?: string;
+  /** Server-side target gate: name the validation to remove. */
   target_class?: string;
   /** Server-side code gate: hand-edited Java, taken verbatim. */
   source?: string;
@@ -195,4 +226,13 @@ export const api = {
   skip: (id: string, stage: string, reason = "") =>
     post<{ stage: string; skipped: boolean; next: string | null }>(
       `/api/run/${id}/stage/${stage}/skip`, { reason }),
+
+  // Reads. browseFields reaches QAD and changes nothing, so it is safe on a
+  // rehearsal run too; browseSearch never leaves the server.
+  browseFields: (uri: string) =>
+    call<BrowseFields>(`/api/browses/fields?uri=${encodeURIComponent(uri)}`),
+
+  browseSearch: (q: string, limit = 8) =>
+    call<{ browses: CatalogBrowse[] }>(
+      `/api/browses/search?q=${encodeURIComponent(q)}&limit=${limit}`),
 };

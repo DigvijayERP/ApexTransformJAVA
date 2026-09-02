@@ -50,11 +50,14 @@ class RunStage(BaseModel):
     browse_uris: Optional[Dict[str, str]] = None
     configs: Optional[List[Dict[str, Any]]] = None
     parent_key: Optional[str] = None
-    # Server-side gates: override the model's component choice, name the
-    # validation to remove, or hand back hand-edited Java. Explicit fields
-    # rather than `configs` because, like parent_key, each is a single
-    # deterministic override the gate offers by name.
+    # bc_name is two gates' deterministic override: the field gate renames the
+    # component when QAD already has that name, and the server-side target gate
+    # picks a different component. Both replace a value without a model call.
+    # Explicit fields rather than `configs` because, like parent_key, each is a
+    # single deterministic override the gate offers by name.
     bc_name: Optional[str] = None
+    # Server-side gates: name the validation to remove, or hand back
+    # hand-edited Java.
     target_class: Optional[str] = None
     source: Optional[str] = None
 

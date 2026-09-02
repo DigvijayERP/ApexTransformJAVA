@@ -11,6 +11,10 @@ parse_abl API. Sections 5-9 cover what changed in the port: every temp-table
 is returned (AUX kept only the first downstream, aux progress_parser.py:379-380),
 LIKE references, the zero-table warning, initial/extent/validate extraction,
 and the looks_like_abl detector.
+
+Sections 10-11 cover the display-frame labels added on 2026-09-01: the owner's
+real source labels its fields in a FORM, not in a temp-table, so nothing here
+used to see them.
 """
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from core.progress_parser import parse_abl, looks_like_abl
+from core.progress_parser import parse_abl, looks_like_abl, _code_hint
 
 FAILURES: list = []
 
@@ -107,6 +111,86 @@ DEFINE TEMP-TABLE ttChild NO-UNDO LIKE ttParent
     FIELD ChildSeq  AS INTEGER
     FIELD ParentRef LIKE ttParent.ParentId
     INDEX PK IS PRIMARY UNIQUE ChildSeq ASCENDING.
+"""
+
+
+# The owner's real display frame, gpekpohu.p (2026-09-01), copied verbatim.
+# Not one of these fields is defined in a temp-table anywhere in that file, so
+# these six lines are the ONLY place its labels exist.
+SRC_FRAME = """
+form
+   ttEkDc_user1           colon 19 label "Transport License" format "x(30)":U
+   ttEkDc_veh_ref1        colon 10 label "Vehicle 1"         format "x(15)":U
+   ttEkDc_veh_ref1_ctry   colon 40 label "Country"           format "x(3)":U
+   ttEkDc_load_addr       colon 19 label "Load address"      format "x(8)":U
+   cCarrierName           colon 40 no-label                  format "x(35)":U
+   ttEkDc_trade_nbr       colon 15 label "Order"
+with frame b title color normal (getFrameTitle("QAD_I19_HU_EKAER_PO" ,28))
+side-labels width 80.
+"""
+
+SRC_TABLE_AND_FRAME = """
+form
+   ttEkDc_load_addr colon 19 label "Load address"      format "x(8)":U
+   ttEkDc_user1     colon 19 label "Transport License" format "x(30)":U
+with frame b side-labels width 80.
+
+DEFINE TEMP-TABLE ttEkDc_mstr NO-UNDO
+    FIELD ttEkDc_load_addr AS CHARACTER FORMAT "x(8)"
+    FIELD ttEkDc_user1     AS CHARACTER FORMAT "x(30)"
+    INDEX PK IS PRIMARY UNIQUE ttEkDc_load_addr ASCENDING.
+"""
+
+SRC_FRAME_AFTER_TABLE = """
+DEFINE TEMP-TABLE ttEkDc_mstr NO-UNDO
+    FIELD ttEkDc_load_addr AS CHARACTER FORMAT "x(8)"
+    FIELD ttEkDc_user1     AS CHARACTER FORMAT "x(30)"
+    INDEX PK IS PRIMARY UNIQUE ttEkDc_load_addr ASCENDING.
+
+form
+   ttEkDc_load_addr colon 19 label "Load address"      format "x(8)":U
+   ttEkDc_user1     colon 19 label "Transport License" format "x(30)":U
+with frame b side-labels width 80.
+"""
+
+SRC_FRAME_CONFLICT = """
+form
+   ttEkDc_load_addr colon 19 label "Load address" format "x(8)":U
+with frame a side-labels width 80.
+
+form
+   ttEkDc_load_addr colon 19 label "Pickup point" format "x(8)":U
+with frame b side-labels width 80.
+"""
+
+# VIEW-AS names the widget that draws the field. The widget name sits between
+# the field name and its LABEL, so before 2026-09-02 the widget was the
+# identifier nearest the LABEL and won the match: `fill-in` came out as a field
+# and ttEkDc_user1 lost its label. Neither owner file uses VIEW-AS, so this is
+# built ABL, marked as such.
+SRC_FRAME_VIEW_AS = """
+form
+   ttEkDc_user1     colon 19 view-as fill-in label "Transport License" format "x(30)":U
+   ttEkDc_dangerous colon 10 view-as toggle-box label "Dangerous goods"
+   ttEkDc_veh_kind  colon 40 view-as combo-box list-items "Truck,Van" label "Vehicle kind"
+   ttEkDc_ctry      colon 19 view-as radio-set radio-buttons "HU", 1, "AT", 2 label "Country"
+   ttEkDc_note      colon 15 view-as editor size 40 by 5 label "Note"
+   cCarrierName     colon 40 view-as fill-in no-label format "x(35)":U
+with frame b side-labels width 80.
+"""
+
+# Two different ABL names, one field code: gpekpohu.p really does carry both
+# ttEkDc_load_addr and cLoadAddr, and _code_hint reads both as `loadAddr`. In
+# the real file the second one is no-label, so nothing clashed; give it a label
+# and the prompt block would offer the model two labels for one code.
+SRC_HINT_CLASH = """
+form
+   ttEkDc_load_addr colon 19 label "Load address" format "x(8)":U
+with frame a side-labels width 80.
+
+form
+   cLoadAddr colon 40 label "Delivery point" format "x(35)":U
+with frame b side-labels width 80.
 """
 
 
@@ -313,6 +397,116 @@ def main() -> int:
           False)
     check("empty text", looks_like_abl(""), False)
     check("whitespace only", looks_like_abl("   \n  "), False)
+
+    section("10. Display-frame labels (the owner's real frame)")
+    r = parse_abl(SRC_FRAME)
+    by_hint = {e["code_hint"]: e["label"] for e in r["frame_labels"]}
+    check("no temp-table in this source", len(r["tables"]), 0)
+    check("every frame entry was read", len(r["frame_labels"]), 6)
+    check("loadAddr label", by_hint.get("loadAddr"), "Load address")
+    check("user1 label", by_hint.get("user1"), "Transport License")
+    check("vehRef1 label", by_hint.get("vehRef1"), "Vehicle 1")
+    check("vehRef1Ctry label", by_hint.get("vehRef1Ctry"), "Country")
+    check("tradeNbr label", by_hint.get("tradeNbr"), "Order")
+    check("source case is kept on the ABL name",
+          [e["abl_name"] for e in r["frame_labels"]][:2],
+          ["ttEkDc_user1", "ttEkDc_veh_ref1"])
+    check("format comes across too",
+          [e["format"] for e in r["frame_labels"]],
+          ["x(30)", "x(15)", "x(3)", "x(8)", "x(35)", None])
+
+    # no-label is a decision the source made. Inventing "Carrier Name" here
+    # would put a label on screen that the original program never showed.
+    check("no-label records the field with no label",
+          [e for e in r["frame_labels"] if e["abl_name"] == "cCarrierName"],
+          [{"abl_name": "cCarrierName", "label": None, "format": "x(35)",
+            "code_hint": "carrierName"}])
+
+    r = parse_abl(SRC_TABLE_AND_FRAME)
+    check("a temp-table alongside a frame still parses",
+          [f["name"] for f in r["tables"][0]["fields"]],
+          ["ttEkDc_load_addr", "ttEkDc_user1"])
+    check("and the frame labels come with it",
+          {e["code_hint"]: e["label"] for e in r["frame_labels"]},
+          {"loadAddr": "Load address", "user1": "Transport License"})
+    check("the temp-table's own label is untouched",
+          r["tables"][0]["fields"][0]["label"], "Tt Ek Dc Load Addr")
+    check("the temp-table's primary key is untouched",
+          r["tables"][0]["primary_key"], ["ttEkDc_load_addr"])
+
+    # Same source, frame written after the temp-table, which is the order the
+    # owner's file uses. The table and the labels must both survive either way.
+    r = parse_abl(SRC_FRAME_AFTER_TABLE)
+    check("frame after the temp-table: fields still parse",
+          [f["name"] for f in r["tables"][0]["fields"]],
+          ["ttEkDc_load_addr", "ttEkDc_user1"])
+    check("frame after the temp-table: labels still parse",
+          {e["code_hint"]: e["label"] for e in r["frame_labels"]},
+          {"loadAddr": "Load address", "user1": "Transport License"})
+
+    r = parse_abl(SRC_FRAME_CONFLICT)
+    check("two frames, two labels, the first wins",
+          [(e["abl_name"], e["label"]) for e in r["frame_labels"]],
+          [("ttEkDc_load_addr", "Load address")])
+    check("and the user is told about both",
+          [w for w in r["warnings"]
+           if "Load address" in w and "Pickup point" in w
+           and "ttEkDc_load_addr" in w],
+          ['field ttEkDc_load_addr is labelled "Load address" in one frame and '
+           '"Pickup point" in another. The first label was kept.'])
+
+    r = parse_abl("Please create a business component for invoices with fields "
+                  "for number, customer and amount. Update the label on the form.")
+    check("plain English yields no frame labels", r["frame_labels"], [])
+
+    section("11. _code_hint: ABL name to field code (a heuristic)")
+    check("temp-table prefix and underscores",
+          _code_hint("ttEkDc_load_addr"), "loadAddr")
+    check("digits stay attached", _code_hint("ttEkDc_veh_ref1"), "vehRef1")
+    check("three segments", _code_hint("ttEkDc_veh_ref1_ctry"), "vehRef1Ctry")
+    check("QAD's double underscore", _code_hint("ttEkDc__qadc01"), "qadc01")
+    check("Hungarian prefix on a variable",
+          _code_hint("cCarrierName"), "carrierName")
+    check("date variable", _code_hint("dSubmDate"), "submDate")
+    check("already a plain code", _code_hint("orderNum"), "orderNum")
+    check("empty name", _code_hint(""), "")
+
+    section("12. VIEW-AS: the widget is not a field")
+    r = parse_abl(SRC_FRAME_VIEW_AS)
+    check("the real field names were read, not the widget names",
+          [e["abl_name"] for e in r["frame_labels"]],
+          ["ttEkDc_user1", "ttEkDc_dangerous", "ttEkDc_veh_kind",
+           "ttEkDc_ctry", "ttEkDc_note", "cCarrierName"])
+    check("every label survived the widget clause",
+          {e["code_hint"]: e["label"] for e in r["frame_labels"]},
+          {"user1": "Transport License", "dangerous": "Dangerous goods",
+           "vehKind": "Vehicle kind", "ctry": "Country", "note": "Note",
+           "carrierName": None})
+    check("no widget name entered the list as a field",
+          [e["abl_name"] for e in r["frame_labels"]
+           if e["abl_name"].lower() in ("fill-in", "toggle-box", "combo-box",
+                                        "radio-set", "editor", "list-items",
+                                        "radio-buttons")],
+          [])
+    check("format is still read past the widget clause",
+          [e["format"] for e in r["frame_labels"]],
+          ["x(30)", None, None, None, None, "x(35)"])
+
+    section("13. Two ABL names, one field code")
+    r = parse_abl(SRC_HINT_CLASH)
+    check("both names are kept in frame_labels",
+          [(e["abl_name"], e["code_hint"]) for e in r["frame_labels"]],
+          [("ttEkDc_load_addr", "loadAddr"), ("cLoadAddr", "loadAddr")])
+    check("and the clash on the field code is named",
+          [w for w in r["warnings"] if "loadAddr" in w],
+          ['fields ttEkDc_load_addr and cLoadAddr both read as \'loadAddr\', '
+           'labelled "Load address" and "Delivery point". '
+           'The first label was kept.'])
+    # The real file's second name is no-label, so it must NOT warn: there is no
+    # second label to disagree with.
+    r = parse_abl(SRC_HINT_CLASH.replace('label "Delivery point"', "no-label"))
+    check("a no-label second name is not a clash",
+          [w for w in r["warnings"] if "loadAddr" in w], [])
 
     print()
     if FAILURES:

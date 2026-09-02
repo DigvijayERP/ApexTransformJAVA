@@ -52,6 +52,41 @@ KNOWN_DATA_TYPES = frozenset({
     "logical", "percent", "url", *DROPDOWN_TYPES,
 })
 
+# Longest BC name the field prompts ask for, and the cap every rename here
+# respects. QAD builds a table name and four urns from this string.
+MAX_BC_NAME = 32
+
+
+def name_candidates(base: str, limit: int = 20) -> List[str]:
+    """The rename ladder for a BC name: base, base2, base3 ... base<limit>.
+
+    Deterministic and offline - no model, no QAD call. When a candidate would
+    run past MAX_BC_NAME the BASE is trimmed and the suffix is kept, never the
+    other way round: dropping the '2' off a 32-character name hands back the
+    name that was already taken.
+    """
+    base = (base or "").strip()
+    if not base or limit < 1:
+        return []
+    out: List[str] = []
+    for i in range(1, limit + 1):
+        suffix = "" if i == 1 else str(i)
+        out.append(base[:MAX_BC_NAME - len(suffix)] + suffix)
+    return out
+
+
+def sanitize_bc_name(asked: str) -> str:
+    """Force a hand-typed BC name into something validate_spec will accept.
+
+    Letters and digits only, PascalCase, no leading digit (QAD builds a table
+    name and a urn from it, and both must start with a letter), capped at
+    MAX_BC_NAME. Returns "" when nothing usable is left, which the caller
+    reports rather than sends.
+    """
+    parts = [p for p in re.split(r"[^A-Za-z0-9]+", asked or "") if p]
+    pascal = "".join(p[0].upper() + p[1:] for p in parts)
+    return re.sub(r"^[0-9]+", "", pascal)[:MAX_BC_NAME]
+
 
 def sql_safe(code: str) -> str:
     return SQL_RESERVED.get(code.lower(), code)

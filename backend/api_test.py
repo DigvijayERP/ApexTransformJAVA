@@ -3,8 +3,10 @@ API test — drives a complete run over HTTP.
 
     cd backend && python api_test.py
 
-No network, no credentials, no key. The MODEL is stubbed and QAD calls are
-dry-run; the FastAPI app, routers, engine, builders and store are all real.
+No network, no credentials, no key. The MODEL is stubbed, the BC name check is
+stubbed, and QAD calls are dry-run; the FastAPI app, routers, engine, builders
+and store are all real. ADAPTIVE_OFFLINE is set as a second belt, so anything
+that tries to reach QAD raises instead of sending.
 
 This covers what pipeline_test.py cannot: request/response shapes, status
 codes, and the auth gate. A stage function that works when called directly can
@@ -13,10 +15,15 @@ still be unreachable or wrongly-coded over HTTP.
 from __future__ import annotations
 
 import json
+import os
 
 import sys
 import tempfile
 from pathlib import Path
+
+# Belt and braces alongside the stubs below: with this set, a call that would
+# reach QAD raises instead of sending, login included.
+os.environ.setdefault("ADAPTIVE_OFFLINE", "1")
 
 # Point the store at a throwaway database BEFORE the app imports it.
 from core import store as _store
@@ -26,7 +33,12 @@ _store.DB_PATH = _TMP
 from fastapi.testclient import TestClient  # noqa: E402
 
 from core import auth, llm  # noqa: E402
-from pipeline_test import stub  # noqa: E402  - reuse the same canned model
+# Reuse the same canned model AND the same QAD name-check stub. The stub is not
+# optional: the fields stage asks QAD whether the BC name is taken before
+# anything is written, and without it this suite logged in to QAD with the real
+# credentials from backend/.env on every run (found 2026-09-01). Stubbing the
+# model alone is not enough to keep a test offline.
+from pipeline_test import stub, _install_name_check_stub  # noqa: E402
 
 # Drive the auth seam directly rather than through the environment. Reading
 # ADAPTIVE_API_TOKEN from os.environ or backend/.env made this test depend on
@@ -53,6 +65,7 @@ def section(title: str) -> None:
 
 def main() -> int:
     llm.set_stub(stub)
+    _install_name_check_stub()
     _TEST_TOKEN["value"] = ""   # unauthenticated for sections 1-6
 
     from main import app
